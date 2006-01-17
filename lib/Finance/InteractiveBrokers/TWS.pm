@@ -1,6 +1,6 @@
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.1');
+use version; $VERSION = qv('0.0.2');
 
 use warnings;
 use strict;
@@ -358,7 +358,9 @@ __END__
 
 =head1 NAME
 
-Finance::InteractiveBrokers::TWS - A wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.
+Lets you talk to Interactivebrokers Trader's Workstation using Perl.
+
+Finance::InteractiveBrokers::TWS is a wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.
 
 =head1 VERSION
 
@@ -500,9 +502,13 @@ Furthermore Finance::InteractiveBrokers::TWS does require that you set your CLAS
 
 Java SDK
 
+=item *
+
+InteractiveBrokers TWS GUI application
+
 =item * 
 
-Inline::Java
+Inline::Java v.50_92 or greater
 
 =back
 
@@ -535,15 +541,19 @@ Please report any bugs or feature requests to
 C<bug-finance-ib-tws@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org>.
 
+=head1 SPECIAL THANKS
+
+Patrick LeBoutillier - Author of Inline::Java, and for all his help while I learned how to use Inline::Java
+
 
 =head1 AUTHOR
 
-Jay Strauss  C<< <me@heyjay.com> >>
+Jay Strauss  C<< <tws_at_heyjay.com> >>
 
 
 =head1 LICENCE AND COPYRIGHT
 
-Copyright (c) 2006, Jay Strauss C<< <me@heyjay.com> >>. All rights reserved.
+Copyright (c) 2006, Jay Strauss C<< <tws_at_heyjay.com> >>. All rights reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.

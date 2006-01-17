@@ -3,3 +3,5 @@ Revision history for Finance-InteractiveBrokers-TWS
 0.0.1  Thu Jan 12 23:25:40 2006
        Initial release.
 
+0.0.2  2006/01/17
+       Updated README, changed email address, updated some POD

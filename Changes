@@ -5,3 +5,8 @@ Revision history for Finance-InteractiveBrokers-TWS
 
 0.0.2  2006/01/17
        Updated README, changed email address, updated some POD
+
+0.0.5  2006/03/02
+       - Altered doc to include updated example
+       - Changed the calls to create the IB objects
+       - Added parameters to all callbacks

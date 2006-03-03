@@ -1,4 +1,4 @@
-Finance-InteractiveBrokers-TWS version 0.0.1
+Finance-InteractiveBrokers-TWS 
 
 This module lets you communicate with InteractiveBroker's (IB) Trader's Work 
 Station (TWS), using Perl.  This is accomplished by wrapping the Java API that

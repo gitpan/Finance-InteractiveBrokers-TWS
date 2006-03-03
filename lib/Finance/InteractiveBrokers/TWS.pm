@@ -1,6 +1,6 @@
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.2');
+use version; $VERSION = qv('0.0.5');
 
 use warnings;
 use strict;
@@ -24,74 +24,61 @@ use Inline (
 
 use Object::InsideOut; 
 {
-    my @host          :Field( Standard=>'host'          );
-    my @port          :Field( Standard=>'port'          );
-    my @client_ID     :Field( Standard=>'client_ID'     );
     my @callback      :Field( Standard=>'callback'      );
     my @api           :Field( Get=>'get_api'            );
     my @EClientSocket :Field( Get=>'get_EClientSocket'  );
     
     my %init_args :InitArgs = (
-        host        => '',
-        port        => '',
-        client_ID   => '',
         callback    => '',
     );
 
     sub _init :Init {
         my ($self, $args) = @_;
 
-        $self->set(\@host, exists $args->{host} ? $args->{host} : '127.0.0.1');
-        $self->set(\@port, exists $args->{port} ? $args->{port} : 7496);
-        $self->set(\@client_ID, exists $args->{client_ID} ? $args->{client_ID} 
-                                                          : $$) ;
-        my $api = Finance::InteractiveBrokers::TWS::Inline_Bridge->new($args->{callback});
-        my $ib  = Finance::InteractiveBrokers::TWS::com::ib::client::EClientSocket->new($api);
+        my $api    = Finance::InteractiveBrokers::TWS::Inline_Bridge->new( 
+                        $args->{callback}
+                     );
+
+        my $socket = $self->EClientSocket->new($api);
         
         $self->set(\@callback, $args->{callback});
         $self->set(\@api, $api);
-        $self->set(\@EClientSocket,  $ib);
+        $self->set(\@EClientSocket, $socket);
     }
 }
 
-sub new_ComboLeg {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::ComboLeg->new(@_);
+#   Simple stubs to as shortcuts to the IB Java objects
+#   
+sub ComboLeg {
+    return __PACKAGE__.'::com::ib::client::ComboLeg';
 }
 
-sub new_ContractDetails {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::ContractDetails->new(@_);
+sub ContractDetails {
+    return __PACKAGE__.'::com::ib::client::ContractDetails';
 }
 
-sub new_Contract {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::Contract->new(@_);
+sub Contract {
+    return __PACKAGE__.'::com::ib::client::Contract';
 }
 
-sub new_EClientErrors {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::EClientErrors->new(@_);
+sub EClientSocket {
+    return __PACKAGE__.'::com::ib::client::EClientSocket';
 }
 
-sub new_ExecutionFilter {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::ExecutionFilter->new(@_);
+sub ExecutionFilter {
+    return __PACKAGE__.'::com::ib::client::ExecutionFilter';
 }
 
-sub new_Execution {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::Execution->new(@_);
+sub Execution {
+    return __PACKAGE__.'::com::ib::client::Execution';
 }
 
-sub new_Order {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::Order->new(@_);
+sub Order {
+    return __PACKAGE__.'::com::ib::client::Order';
 }
 
-sub new_ScannerSubscription {
-    my $self = shift;
-    return Finance::InteractiveBrokers::TWS::com::ib::client::ScannerSubscription->new(@_);
+sub ScannerSubscription {
+    return __PACKAGE__.'::com::ib::client::ScannerSubscription';
 }
 
 1;
@@ -142,6 +129,8 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("orderStatus", new Object [] {
+                orderId, status, filled, remaining, avgFillPrice,
+                permId, parentId, lastFillPrice, clientId
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -152,6 +141,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("openOrder", new Object [] {
+                orderId, contract, order
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -162,6 +152,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("error", new Object [] {
+                str
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -184,6 +175,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("updateAccountValue", new Object [] {
+                key, value, currency, accountName
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -197,6 +189,8 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
                                 double realizedPNL, String accountName) {
         try {
             perlobj.InvokeMethod("updatePortfolio", new Object [] {
+                contract, position, marketPrice, marketValue,
+                averageCost, unrealizedPNL, realizedPNL, accountName
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -228,6 +222,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("contractDetails", new Object [] {
+                contractDetails
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -238,6 +233,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("bondContractDetails", new Object [] {
+                contractDetails
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -249,6 +245,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     
         try {
             perlobj.InvokeMethod("execDetails", new Object [] {
+                orderId, contract, execution
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -271,6 +268,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("updateMktDepth", new Object [] {
+                tickerId, position, operation, side, price, size
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -283,6 +281,8 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("updateMktDepthL2", new Object [] {
+                tickerId, position, marketMaker, operation,
+                side, price, size
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -294,6 +294,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("updateNewsBulletin", new Object [] {
+                msgId, msgType, message, origExchange
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -304,6 +305,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("managedAccounts", new Object [] {
+                accountsList
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -314,6 +316,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("receiveFA", new Object [] {
+                faDataType, xml
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -327,6 +330,8 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     {
         try {
             perlobj.InvokeMethod("historicalData", new Object [] {
+                reqId, date, open, high, low,
+                close, volume, WAP, hasGaps
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -336,6 +341,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     public void scannerParameters(String xml) {
         try {
             perlobj.InvokeMethod("scannerParameters", new Object [] {
+                xml
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -347,6 +353,8 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
                             String benchmark, String projection) {
         try {
             perlobj.InvokeMethod("scannerData", new Object [] {
+                reqId, rank, contractDetails, distance,
+                benchmark, projection
             });
         }
         catch (InlineJavaPerlException pe){ }
@@ -358,79 +366,130 @@ __END__
 
 =head1 NAME
 
-Lets you talk to Interactivebrokers Trader's Workstation using Perl.
+Finance::InteractiveBrokers::TWS - Lets you talk to Interactivebrokers Trader's Workstation using Perl.
 
-Finance::InteractiveBrokers::TWS is a wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.
+This module is a wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.  This means that all the functionality available to Java programmers is also available to you.
 
 =head1 VERSION
 
-This document describes Finance::InteractiveBrokers::TWS version 0.0.1
+This document describes Finance::InteractiveBrokers::TWS 
 
 =head1 SYNOPSIS
 
- package Callback;
+ package Local::Callback;
  use strict;
- 
+
  sub new {
      bless {}, shift;
  }
- 
- sub tickPrice {
-     my $self = shift;
-     print "tickPrice called with: ", join(" ", @_), "\n";
- }
- 
- sub tickSize {
-     my $self = shift;
-     print "tickSize called with: ", join(" ", @_), "\n";
- }
- 
+
  sub nextValidId {
      my $self = shift;
+     $self->{nextValidId} = $_[0];
      print "nextValidId called with: ", join(" ", @_), "\n";
  }
- 
+
  sub error {
-     my $self = shift;
-     print "error: ", join(" ", @_), "\n";
+     my ($self, $return_code, $error_num, $error_text) = @_;
+
+     print "error called with: ", join('|', $return_code,
+         $error_num, $error_text), "\n";
+
+
+     # sleep for some predetermined time if I get a 502
+     # Couldn't connect to TWS.  Confirm that "Enable ActiveX and 
+     # Socket Clients" is enabled on the TWS "Configure->API" menu.
+     if ($error_num == 502) {
+        sleep 60;
+     }
  }
- 
+
+ sub AUTOLOAD {
+     my ($self, @args) = @_;
+     our $AUTOLOAD;
+     print "$AUTOLOAD called with: ", join '^', @args, "\n";
+     return;
+ }
+
+
  package main;
  
- use strict;
  use Finance::InteractiveBrokers::TWS;
- 
- my $callback = Callback->new();
- my $tws      = Finance::InteractiveBrokers::TWS->new(callback=>$callback);
- my $ib       = $tws->get_EClientSocket();
- my $api      = $tws->get_api();
- 
- ####                        Host         Port    Client_ID
- ####                        ----         ----    ---------
- my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
- 
- $ib->eConnect(@tws_GUI_location);
- $api->OpenCallbackStream() ;
- 
- my $flag = 1;
- 
- my $contract = $tws->new_Contract();
- $contract->{m_symbol} = 'YHOO';
- $contract->{m_secType} = 'STK';
- $contract->{m_exchange} = 'SMART';
- 
- while ((my $got_data = $api->WaitForCallback(.01)) > -1) {
- 
-     if ($got_data) {
-         $api->ProcessNextCallback() ;
+
+ my $connected = 0;
+
+ while (1) {
+
+     if ($connected) {
+         process_queue();
      }
      else {
-         if ($flag) {
-             $flag=0;
-             my $contract_id = 50;
-             $ib->reqMktData($contract_id, $contract);
-         }
+         connect_to_tws();
      }
+ }
+
+ #   connect_to_tws, connects to the tws and sets up a few 
+ #   objects that we want clean at every new connection
+ sub connect_to_tws {
+
+     my $callback = Local::Callback->new();
+     my $tws      = Finance::InteractiveBrokers::TWS->new(
+                       callback => $callback
+                    );
+
+     my $client_socket = $tws->get_EClientSocket();
+     my $api           = $tws->get_api();
+
+     ####                        Host         Port    Client_ID
+     ####                        ----         ----    ---------
+     my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
+     
+     while (! $tws->get_EClientSocket->isConnected()) {
+     
+        $client_socket->eConnect(@tws_GUI_location);
+     }
+
+     $api->OpenCallbackStream();
+
+     # spin until we get a nextValidId, that way we know the connection 
+     # is complete
+     while (! defined $callback->{nextValidId}) {
+         process_queue($api);
+     }
+
+     #   Just process the queue for a little to make sure all connection 
+     #   messages have been processed, otherwise if I interact with TWS 
+     #   too early I get weird errors
+     foreach (0..100) {
+         process_queue($api);
+     }
+
+     my $contract_id = 50;      # this can be any number you want
+     my $contract    = $tws->Contract->new();
+     
+     $contract->{m_symbol}   = 'YHOO';
+     $contract->{m_secType}  = 'STK';
+     $contract->{m_exchange} = 'SMART';
+
+     $client_socket->reqMktData($contract_id, $contract);
+
+     my $connected = 1;
+
+     return;
+ }
+
+ #   process_queue, process all the current messages that have been sent 
+ #   from the TWS at this point.  The callback will be called for each
+ #   message in the queue
+ sub process_queue {
+
+     my ($api) = @_;
+
+     while ($api->WaitForCallback(.05)) {  # .05 works good here, I had
+         $api->ProcessNextCallback();      # problems with .01
+     }
+
+     return;
  }
 
 =head1 DESCRIPTION
@@ -483,6 +542,28 @@ http://www.interactivebrokers.com/php/webhelp/Interoperability/Socket_Client_Jav
 
 C<< Finance::InteractiveBrokers::TWS::java::lang::NullPointerException=HASH(0x8b671cc) >> -  This means you did not supply a callback object when you instantiated a Finance::IB:TWS object.
 
+ The error message was:
+ TWS_661f.java:21: incompatible types
+ found   : int
+ required: java.lang.Object
+                     tickerId, field, price, canAutoExecute
+                     ^
+
+The above error is sort of a bug, sort of an inconsistancy.  But basically if you are running Java <= 1.4 then you need to alter the TWS.pm source and change the lines that look like:
+
+ perlobj.InvokeMethod("tickPrice", new Object [] {
+                       tickerId, field, price, canAutoExecute
+                      });
+
+and manually cast the variables into their types directly, like this:
+
+ perlobj.InvokeMethod("tickPrice", new Object [] {
+    new Integer (tickerId), new Integer (field), new Double (price), 
+    new Integer (canAutoExecute)});
+
+I don't feel like going through all the code to do this, especially since most
+people will be using Java 1.5 and above shortly
+
 =head1 CONFIGURATION AND ENVIRONMENT
 
 You need to compile the *.java API source files into java class files prior to using this module.  Do it like:
@@ -514,28 +595,11 @@ Inline::Java v.50_92 or greater
 
 =head1 INCOMPATIBILITIES
 
-=for author to fill in:
-    A list of any modules that this module cannot be used in conjunction
-    with. This may be due to name conflicts in the interface, or
-    competition for system or program resources, or due to internal
-    limitations of Perl (for example, many modules that use source code
-    filters are mutually incompatible).
-
-None reported.
-
+See above DIAGNOSTICS
 
 =head1 BUGS AND LIMITATIONS
 
-=for author to fill in:
-    A list of known problems with the module, together with some
-    indication Whether they are likely to be fixed in an upcoming
-    release. Also a list of restrictions on the features the module
-    does provide: data types that cannot be handled, performance issues
-    and the circumstances in which they may arise, practical
-    limitations on the size of data sets, special cases that are not
-    (yet) handled, etc.
-
-No bugs have been reported.
+See above DIAGNOSTICS
 
 Please report any bugs or feature requests to
 C<bug-finance-ib-tws@rt.cpan.org>, or through the web interface at
@@ -544,7 +608,6 @@ L<http://rt.cpan.org>.
 =head1 SPECIAL THANKS
 
 Patrick LeBoutillier - Author of Inline::Java, and for all his help while I learned how to use Inline::Java
-
 
 =head1 AUTHOR
 

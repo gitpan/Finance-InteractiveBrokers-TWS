@@ -1,10 +1,25 @@
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.5');
+use version; $VERSION = qv('0.0.6');
 
 use warnings;
 use strict;
 use Carp;
+
+#   Define comp_dir to hold the location for where we 
+#   want Inline::Java to complile its Java files.  Otherwise
+#   Inline will create them in the pwd of the executed script
+my $comp_dir;
+
+BEGIN {
+    use Config;
+    use File::Spec;
+    $comp_dir = File::Spec->catfile(
+        $Config{sitelib},
+        split(/::/,__PACKAGE__),
+        "_Inline",
+    );
+}
 
 use Inline (
     Java        => "DATA",
@@ -20,31 +35,143 @@ use Inline (
               'com.ib.client.Order',
               'com.ib.client.ScannerSubscription',
              ],
+    # complile Java in specific directory
+    DIRECTORY => $comp_dir,  
+);
+
+#   A hash of method names that TWS API (from IB) currently supports.  If a 
+#   new one is added in a later version of TWS, simply add it to this hash
+#   
+my %sub_of = (
+    cancelScannerSubscription => 1,
+    reqScannerParameters => 1,
+    reqScannerSubscription => 1,
+    reqMktData => 1,
+    cancelHistoricalData => 1,
+    reqHistoricalData => 1,
+    reqContractDetails => 1,
+    reqMktDepth => 1,
+    cancelMktData => 1,
+    cancelMktDepth => 1,
+    exerciseOptions => 1,
+    placeOrder => 1, 
+    reqAccountUpdates => 1,
+    reqExecutions => 1,
+    cancelOrder => 1,
+    reqOpenOrders => 1,
+    reqIds => 1,
+    reqNewsBulletins => 1,
+    cancelNewsBulletins => 1,
+    setServerLogLevel => 1,
+    reqAutoOpenOrders => 1,
+    reqAllOpenOrders => 1,
+    reqManagedAccts => 1,
+    requestFA => 1,
+    replaceFA => 1,
 );
 
 use Object::InsideOut; 
 {
-    my @callback      :Field( Standard=>'callback'      );
-    my @api           :Field( Get=>'get_api'            );
-    my @EClientSocket :Field( Get=>'get_EClientSocket'  );
+
+    my @callback      :Field( Get      =>'callback'          );
+    my @api           :Field( Get      =>'get_api'           );
+    my @EClientSocket :Field( Get      =>'get_EClientSocket' );
     
     my %init_args :InitArgs = (
-        callback    => '',
+        callback    => { Field=>\@callback, Mandatory => 1 },
     );
 
     sub _init :Init {
         my ($self, $args) = @_;
 
         my $api    = Finance::InteractiveBrokers::TWS::Inline_Bridge->new( 
-                        $args->{callback}
+                        $callback[$$self]
                      );
 
         my $socket = $self->EClientSocket->new($api);
         
-        $self->set(\@callback, $args->{callback});
         $self->set(\@api, $api);
         $self->set(\@EClientSocket, $socket);
     }
+ 
+    # A wrapper around Object::InsideOut's ->new() method just to 
+    # simplify the call to this module as a single parm call as opposed 
+    # to using a hash
+    sub new { 
+	    my ($class, $callback) = @_;
+	    return $class->Object::InsideOut::new(callback => $callback);
+    }
+}
+
+sub eConnect {
+
+    my $self     = shift;
+    my ($host, $port, $client_id) = @_;
+
+    $host      ||= 'localhost';
+    $port      ||= 7496;
+    $client_id ||= $$;
+
+    my $client_socket = $self->get_EClientSocket();
+
+    $client_socket->eConnect($host, $port, $client_id);
+
+    $self->get_api->OpenCallbackStream();
+
+    my $wait = 2;
+    print "$wait second wait - while TWS connection process completes\n";
+    $self->process_messages($wait);
+
+    return $self->isConnected();
+}
+
+sub eDisconnect {
+    my $self = shift;
+    $self->get_EClientSocket->eDisconnect();
+    $self->process_messages();
+    
+    return ! $self->isConnected(); # negate so that returns true on success
+}
+
+sub isConnected {
+    my $self = shift;
+    return $self->get_EClientSocket->isConnected();
+}
+
+sub process_messages {
+
+    my ($self, $wait) = @_;
+
+    $wait ||= .05;
+    my $api = $self->get_api();
+
+    while ($api->WaitForCallback($wait)) {
+        $api->ProcessNextCallback();
+    }
+    
+    return;
+}
+
+sub AUTOLOAD {
+    my $self = shift;
+    my @args = @_;
+
+    our $AUTOLOAD;
+
+    my $sub_name = $AUTOLOAD;
+    $sub_name =~ s/^.*:://;
+
+    my $ec = $self->get_EClientSocket;
+
+    if (defined $sub_of{$sub_name}) {
+        $ec->$sub_name(@_);
+    }
+    else {
+        $self->eDisconnect();
+        croak "no method: $sub_name defined\n";
+    }
+
+    return;
 }
 
 #   Simple stubs to as shortcuts to the IB Java objects
@@ -372,143 +499,79 @@ This module is a wrapper around InteractiveBroker's Trader's Workstation (TWS) J
 
 =head1 VERSION
 
-This document describes Finance::InteractiveBrokers::TWS 
+0.0.6 - Still Alpha since bugs are being found and the interface is changing.  But all in all it seems to work quite nicely
 
 =head1 SYNOPSIS
 
- package Local::Callback;
- use strict;
+=head2 Methods implemented by Finance::InteractiveBrokers::TWS
 
- sub new {
-     bless {}, shift;
- }
-
- sub nextValidId {
-     my $self = shift;
-     $self->{nextValidId} = $_[0];
-     print "nextValidId called with: ", join(" ", @_), "\n";
- }
-
- sub error {
-     my ($self, $return_code, $error_num, $error_text) = @_;
-
-     print "error called with: ", join('|', $return_code,
-         $error_num, $error_text), "\n";
-
-
-     # sleep for some predetermined time if I get a 502
-     # Couldn't connect to TWS.  Confirm that "Enable ActiveX and 
-     # Socket Clients" is enabled on the TWS "Configure->API" menu.
-     if ($error_num == 502) {
-        sleep 60;
-     }
- }
-
- sub AUTOLOAD {
-     my ($self, @args) = @_;
-     our $AUTOLOAD;
-     print "$AUTOLOAD called with: ", join '^', @args, "\n";
-     return;
- }
-
-
- package main;
- 
  use Finance::InteractiveBrokers::TWS;
+ 
+ my $tws = Finance::InteractiveBrokers::TWS->new(callback=>$callback);
+ 
+ my $callback         = $tws->get_callback();
+ my $rc               = $tws->eConnect($host, $port, $client_id);
+ my $rc               = $tws->eDisconnect();
+ my $rc               = $tws->isConnected(@parms);
+ my $rc               = $tws->process_messages($seconds_to_wait);
 
- my $connected = 0;
+=head2 Shortcuts for instantiating IB Java classes
 
- while (1) {
+ my $combo_leg        = $tws->ComboLeg->new(@parms);
+ my $contract_details = $tws->ContractDetails->new(@parms);
+ my $contract         = $tws->Contract->new(parms);
+ my $execution_filter = $tws->ExecutionFilter->new(@parms);
+ my $execution        = $tws->Execution->new(@parms);
+ my $order            = $tws->Order->new(@parms);
+ my $scanner_sub      = $tws->ScannerSubscription->new(@parms);
 
-     if ($connected) {
-         process_queue();
-     }
-     else {
-         connect_to_tws();
-     }
- }
-
- #   connect_to_tws, connects to the tws and sets up a few 
- #   objects that we want clean at every new connection
- sub connect_to_tws {
-
-     my $callback = Local::Callback->new();
-     my $tws      = Finance::InteractiveBrokers::TWS->new(
-                       callback => $callback
-                    );
-
-     my $client_socket = $tws->get_EClientSocket();
-     my $api           = $tws->get_api();
-
-     ####                        Host         Port    Client_ID
-     ####                        ----         ----    ---------
-     my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
-     
-     while (! $tws->get_EClientSocket->isConnected()) {
-     
-        $client_socket->eConnect(@tws_GUI_location);
-     }
-
-     $api->OpenCallbackStream();
-
-     # spin until we get a nextValidId, that way we know the connection 
-     # is complete
-     while (! defined $callback->{nextValidId}) {
-         process_queue($api);
-     }
-
-     #   Just process the queue for a little to make sure all connection 
-     #   messages have been processed, otherwise if I interact with TWS 
-     #   too early I get weird errors
-     foreach (0..100) {
-         process_queue($api);
-     }
-
-     my $contract_id = 50;      # this can be any number you want
-     my $contract    = $tws->Contract->new();
-     
-     $contract->{m_symbol}   = 'YHOO';
-     $contract->{m_secType}  = 'STK';
-     $contract->{m_exchange} = 'SMART';
-
-     $client_socket->reqMktData($contract_id, $contract);
-
-     my $connected = 1;
-
-     return;
- }
-
- #   process_queue, process all the current messages that have been sent 
- #   from the TWS at this point.  The callback will be called for each
- #   message in the queue
- sub process_queue {
-
-     my ($api) = @_;
-
-     while ($api->WaitForCallback(.05)) {  # .05 works good here, I had
-         $api->ProcessNextCallback();      # problems with .01
-     }
-
-     return;
- }
+=head2 Shortcuts for asking TWS to do something for you
+  
+ $tws->cancelHistoricalData(@parms);
+ $tws->cancelMktData(@parms);
+ $tws->cancelMktDepth(@parms);
+ $tws->cancelNewsBulletins(@parms);
+ $tws->cancelOrder(@parms);
+ $tws->cancelScannerSubscription(@parms);
+ $tws->exerciseOptions(@parms);
+ $tws->placeOrder(@parms);
+ $tws->replaceFA(@parms);
+ $tws->reqAccountUpdates(@parms);
+ $tws->reqAllOpenOrders(@parms);
+ $tws->reqAutoOpenOrders(@parms);
+ $tws->reqContractDetails(@parms);
+ $tws->reqExecutions(@parms);
+ $tws->reqHistoricalData(@parms);
+ $tws->reqIds(@parms);
+ $tws->reqManagedAccts(@parms);
+ $tws->reqMktData(@parms);
+ $tws->reqMktDepth(@parms);
+ $tws->reqNewsBulletins(@parms);
+ $tws->reqOpenOrders(@parms);
+ $tws->reqScannerParameters(@parms);
+ $tws->reqScannerSubscription(@parms);
+ $tws->requestFA(@parms);
+ $tws->setServerLogLevel(@parms);
 
 =head1 DESCRIPTION
 
 Finance::InteractiveBrokers::TWS - Is a wrapper around InteractiveBrokers Traders Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.
 
-It uses Inline::Java to wrap InteractiveBrokers' Java API that IB supplies to communicate with the TWS.  After numerous attempts at writing a pure perl module I opted for this solution because:
+It uses Inline::Java to wrap InteractiveBrokers' Java API that IB supplies to communicate with the TWS.  As such, the method names don't conform to Perl standards and in most cases follow Java standards.
+
+After numerous attempts at writing a pure perl module I opted for this solution because:
 
 =over 
 
-=item *
+=item * 
 
 Using Inline::Java resulted in a much simpler and smaller module
 
-=item *
+=item * 
 
 The interaction and call syntax is identical to the Java API (because it is the Java API) and as such, you can ask questions on the IB bulletin board and yahoo, and be using the same method names and call syntax as they are.  In other words, people will know what you're talking about.
 
-=item *
+=item * 
 
 IB changes their interface with some frequency, which required re-writing my interface every time 
 
@@ -522,25 +585,324 @@ Whenever IB changes something I'd have to diff the old API versus the new API an
 
 =back
 
-=head1 INTERFACE 
+=head2 Class methods
 
-The interface is identical to the Java API supplied by InteractiveBrokers.  There are 2 interfaces to be exact.  The calling interface, i.e. the methods you call to send data to the TWS, and the callback interface, that is the data that is sent back to your custom event handler (callback).
+The following methods are provided by the Finance::InteractiveBrokers::TWS class
 
-I'm not going to document the interface (unless you make me) since InteractiveBrokers already did.
+=head3 new
 
-=head2 Calling Interface
+Sorta obvious, this instantiates an object of class Finance::InteractiveBrokers::TWS.  It requires a single parameter: a callback object.  That is, you (the user) has to write an class that can handle messages that the TWS will send to this client.
 
-IB's documentation is pretty weak.  But here is a list of methods you can call once you have created a Finance::InteractiveBrokers::TWS object
+ my $tws = Finance::InteractiveBrokers::TWS->new($callback);
+
+=head3 get_callback
+
+Simply returns the callback you supplied when you instantiated this class.  Provided in case you need to pass around your $tws and want to access data you might have cached away in your callback
+
+ my $callback = $tws->get_callback();
+
+
+=head3 eConnect
+
+Establishes (or tries to) a connection to the TWS defined in its parameters.  It accepts 3 parameters: 
+
+=over 4
+
+=item 1 IP address or Host name - DEFAULTS to localhost
+
+=item 2 The port upon which TWS is accepting connections - DEFAULTS to 7496
+
+=item 3 The client ID - DEFAULTS to process id
+
+=back
+
+ my $boolean = $tws->eConnect($host, $port, $client_id)
+
+=head3 eDisconnect
+
+Disconnects from the TWS, and returns a boolean of success or failure in disconnection.
+
+ my $booean = $tws->eDisconnect();
+
+=head3 isConnected
+
+Returns a boolean of whether or not you are currently connected to the TWS
+
+ my $boolean = $tws->isConnected();
+
+=head3 process_messages
+
+Processes the messages the TWS has emitted.  It accepts a single optional parameter of how many seconds to listen for messages to process.  If no messages are found within the wait period, control is returned to the caller.
+
+ my $seconds_to_wait = 2;
+ $tws->process_messages($seconds_to_wait);
+
+=head2 Java methods
+
+The following methods are not implemented by Finance::InteractiveBrokers::TWS, but instead are accessed thru your $tws and implemented by the IB published API. The obvious benefit is I have to do less work.  The other benefit (probably more important to you) is that when IB changes things this code continues to work.
+
+IB's documentation is pretty weak.  But here is a link to IBs website with a list of methods you can call once you have created a Finance::InteractiveBrokers::TWS object
 
 http://www.interactivebrokers.com/php/webhelp/Interoperability/Socket_Client_Java/java_eclientsocket.htm
 
-=head2 Callback Interface
+=head3 cancelHistoricalData
+
+ $tws->cancelHistoricalData(@parms);
+
+=head3 cancelMktData
+
+ $tws->cancelMktData(@parms);
+
+=head3 cancelMktDepth
+
+ $tws->cancelMktDepth(@parms);
+
+=head3 cancelNewsBulletins
+
+ $tws->cancelNewsBulletins(@parms);
+
+=head3 cancelOrder
+
+ $tws->cancelOrder(@parms);
+
+=head3 cancelScannerSubscription
+
+ $tws->cancelScannerSubscription(@parms);
+
+=head3 exerciseOptions
+
+ $tws->exerciseOptions(@parms);
+
+=head3 placeOrder
+
+ $tws->placeOrder(@parms);
+
+=head3 replaceFA
+
+ $tws->replaceFA(@parms);
+
+=head3 reqAccountUpdates
+
+ $tws->reqAccountUpdates(@parms);
+
+=head3 reqAllOpenOrders
+
+ $tws->reqAllOpenOrders(@parms);
+
+=head3 reqAutoOpenOrders
+
+ $tws->reqAutoOpenOrders(@parms);
+
+=head3 reqContractDetails
+
+ $tws->reqContractDetails(@parms);
+
+=head3 reqExecutions
+
+ $tws->reqExecutions(@parms);
+
+=head3 reqHistoricalData
+
+ $tws->reqHistoricalData(@parms);
+
+=head3 reqIds
+
+ $tws->reqIds(@parms);
+
+=head3 reqManagedAccts
+
+ $tws->reqManagedAccts(@parms);
+
+=head3 reqMktData
+
+ $tws->reqMktData(@parms);
+
+=head3 reqMktDepth
+
+ $tws->reqMktDepth(@parms);
+
+=head3 reqNewsBulletins
+
+ $tws->reqNewsBulletins(@parms);
+
+=head3 reqOpenOrders
+
+ $tws->reqOpenOrders(@parms);
+
+=head3 reqScannerParameters
+
+ $tws->reqScannerParameters(@parms);
+
+=head3 reqScannerSubscription
+
+ $tws->reqScannerSubscription(@parms);
+
+=head3 requestFA
+
+ $tws->requestFA(@parms);
+
+=head3 setServerLogLevel
+
+ $tws->setServerLogLevel(@parms);
+
+
+=head2 Creating Java Objects
+
+In addition to the methods described just above.  There are some additional methods available for creating the other IB Java objects necessary for interacting with the TWS.
+
+=head3 Instantiating
+
+When instantiating these objects you can pass all the parameters in positionally according to how IB has documented them.  Or you can just create them blank and set the attributes later.
+
+ my $ComboLeg            = $tws->ComboLeg->new(@parms);
+ 
+ my $Contract            = $tws->Contract->new(@parms);
+ 
+ my $ContractDetails     = $tws->ContractDetails->new(@parms);
+ 
+ my $EClientSocket       = $tws->EClientSocket->new(@parms);
+
+ my $Execution           = $tws->Execution->new(@parms);
+
+ my $ExecutionFilter     = $tws->ExecutionFilter->new(@parms);
+ 
+ my $Order               = $tws->Order->new(@parms);
+
+ my $ScannerSubscription = $tws->ScannerSubscription->new(@parms);
+
+If you find that IB publishes a new Java object that you need to use and it's not included above, you can still use the new object.  The above list is really just a shortcut for doing it the long way.  Such as:
+
+ my $order = Finance::InteractiveBrokers::TWS::com::ib::client::ComboLeg->new();
+
+=head3 Set/Get
+
+When Inline::Java creates these objects it hands back a Perl reference to hash.  Thus working with these objects is simple.  To set a attribute of an object you do it like:
+
+ $contract->{m_symbol}   = 'YHOO';
+
+To get an attribute of an object you do it like:
+
+ my $symbol = $contract->{m_symbol};
+
+=head1 CALLBACK
+
+The callback is the custom code you write to handle the messages the TWS emits and that are picked up by the API.  The API dispatches (call) your callback to handle processing of the message.
+
+The methods that are called are described (poorly) by IB at:
 
 http://www.interactivebrokers.com/php/webhelp/Interoperability/Socket_Client_Java/java_ewrapper.htm
 
+But in general, you will have methods in your callback like:
+
+ sub tickPrice {
+    my ($self, @args) = @_;
+    
+    # do something when you get a change in price
+ }
+
+ sub error {
+    my ($self, @args) = @_;
+
+    # handle the error
+ }
+
+Again, these methods are described by IB on their website.
+
+=head1 EXAMPLE
+
+ package Local::Callback;
+ use strict;
+ 
+ sub new {
+     bless {}, shift;
+ }
+ 
+ sub nextValidId {
+     my $self = shift;
+     $self->{nextValidId} = $_[0];
+     print "nextValidId called with: ", join(" ", @_), "\n";
+ }
+ 
+ sub error {
+     my ($self, $return_code, $error_num, $error_text) = @_;
+ 
+     print "error called with: ", join('|', $return_code,
+         $error_num, $error_text), "\n";
+ 
+     # sleep for some predetermined time if I get a 502
+     # Couldn't connect to TWS.  Confirm that "Enable ActiveX and
+     # Socket Clients" is enabled on the TWS "Configure->API" menu.
+    if ($error_num == 502) {
+        sleep 60;
+     }
+ }
+ 
+ sub AUTOLOAD {
+     my ($self, @args) = @_;
+     our $AUTOLOAD;
+     print "$AUTOLOAD called with: ", join '^', @args, "\n";
+     return;
+ }
+ 
+ package main;
+ 
+ use Finance::InteractiveBrokers::TWS;
+ 
+ my $tws;
+ 
+ while (1) {
+ 
+     if (defined $tws and $tws->isCconnected) {
+         $tws->process_messages(1);
+     }
+     else {
+         connect_to_tws();
+     }
+ }
+ 
+ $tws->eDisconnect;
+ 
+ #   connect_to_tws, connects to the tws and sets up a few
+ #   objects that we want clean at every new connection
+ sub connect_to_tws {
+ 
+     my $callback = Local::Callback->new();
+     $tws = Finance::InteractiveBrokers::TWS->new($callback);
+ 
+     ####                        Host         Port    Client_ID
+     ####                        ----         ----    ---------
+     #my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
+     my @tws_GUI_location = qw/  pt    7496       15     /;
+ 
+     $tws->eConnect(@tws_GUI_location);
+ 
+     my $contract_id = 50;      # this can be any number you want
+     my $contract    = $tws->Contract->new();
+ 
+     $contract->{m_symbol}   = 'YHOO';
+     $contract->{m_secType}  = 'STK';
+     $contract->{m_exchange} = 'SMART';
+ 
+     $tws->reqMktData($contract_id, $contract);
+ 
+     $tws->process_messages(3);
+ 
+     return;
+ }
+ 
+=head1 HELP
+
+You are welcome to email me if you are having problems with this module.  You should also look at the IB forums (http://www.interactivebrokers.com/cgi-bin/discus/discus.pl) if you have questions about interacting with the TWS (i.e. how to get TWS to do something for you, what the proper call syntax is...)
+
+There is also another forum on: http://finance.groups.yahoo.com/group/TWSAPI . I'm not exactly sure of what the difference is.
+
+There is a Wiki for TWS at: http://chuckcaplan.com/twsapi/
+
 =head1 DIAGNOSTICS
 
-C<< Finance::InteractiveBrokers::TWS::java::lang::NullPointerException=HASH(0x8b671cc) >> -  This means you did not supply a callback object when you instantiated a Finance::IB:TWS object.
+ Finance::InteractiveBrokers::TWS::java::lang::NullPointerException=HASH(0x8b671cc)
+ 
+This means you did not supply a callback object when you instantiated a Finance::IB:TWS object.
 
  The error message was:
  TWS_661f.java:21: incompatible types
@@ -605,9 +967,15 @@ Please report any bugs or feature requests to
 C<bug-finance-ib-tws@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org>.
 
-=head1 SPECIAL THANKS
+=head1 VERY SPECIAL THANKS
 
 Patrick LeBoutillier - Author of Inline::Java, and for all his help while I learned how to use Inline::Java
+
+=head1 ACKNOWLEDGEMENTS
+
+Carl Erickson wrote the first Perl interface. Based on his README, it was sort of a proof of concept, and doesn't implement all of TWS's functionality. Carl is pretty active on the TWS mailing list(s). He doesn't actively "support" the perl code, but he's very helpful if you want to try it and need some help. This code is meant to be synchronous and blocking; in that you request market data, and your program blocks until you get the data back. Every time you want new data, you request it.
+
+You can find the code on the Yahoo TWSAPI group, I think the following link will work: http://finance.groups.yahoo.com/group/TWSAPI/files/Perl%20Code/
 
 =head1 AUTHOR
 

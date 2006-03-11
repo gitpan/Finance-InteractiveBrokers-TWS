@@ -8,4 +8,5 @@ lib/Finance/InteractiveBrokers/TWS.pm
 t/00.load.t
 t/pod-coverage.t
 t/pod.t
+t/01.option_chain.t
 

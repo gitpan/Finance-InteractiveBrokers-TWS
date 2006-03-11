@@ -12,9 +12,19 @@ WriteMakefile(
         'Test::More'        => 0,
         'version'           => 0,
         'Inline::Java'      => .5092,
-       # 0_94',
         'Object::InsideOut' => 0,
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean               => { FILES => 'Finance-InteractiveBrokers-TWS-*' },
 );
+
+use Config;
+use File::Spec;
+
+my $comp_dir = $Config{sitelib};
+
+foreach (qw/Finance InteractiveBrokers TWS _Inline/) {
+
+    $comp_dir = File::Spec->catfile($comp_dir, $_);
+    mkdir $comp_dir;
+}

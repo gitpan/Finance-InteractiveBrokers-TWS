@@ -16,3 +16,15 @@ my $builder = Module::Build->new(
 );
 
 $builder->create_build_script();
+
+
+use Config;
+use File::Spec;
+
+my $comp_dir = $Config{sitelib};
+
+foreach (qw/Finance InteractiveBrokers TWS _Inline/) {
+
+    $comp_dir = File::Spec->catfile($comp_dir, $_);
+    mkdir $comp_dir;
+}

@@ -13,7 +13,8 @@ PREREQUISTES
 
     * TWS installed and running somewhere upon your network
     
-    * Java SDK installed locally
+    * Java JDK/JRE version >= 1.5 installed locally - if you have less 
+      there is a workaround.
     
     * TWS Java API provided by IB installed locally 
       (see: http://www.interactivebrokers.com/cgi-pub/unix_standalone_api.pl)

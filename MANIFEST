@@ -5,8 +5,19 @@ META.yml # Will be created by "make dist"
 Makefile.PL
 README
 lib/Finance/InteractiveBrokers/TWS.pm
+lib/Finance/InteractiveBrokers/tws.conf
 t/00.load.t
 t/pod-coverage.t
 t/pod.t
 t/01.option_chain.t
+example/01.dump.t
+example/place_order.pl
+example/01.reqAccountUpdates.t
+example/01.reqContractDetails.t
+example/01.reqExecutions.t
+example/01.reqMktData.t
+example/01.reqMktDepth.t
+example/01.reqOpenOrders.t
+example/demo.pl
+
 

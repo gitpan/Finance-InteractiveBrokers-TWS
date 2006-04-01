@@ -1,10 +1,12 @@
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.6');
+use version; $VERSION = qv('0.0.7');
 
 use warnings;
 use strict;
 use Carp;
+use Tie::IxHash;
+use Config::General;
 
 #   Define comp_dir to hold the location for where we 
 #   want Inline::Java to complile its Java files.  Otherwise
@@ -39,43 +41,13 @@ use Inline (
     DIRECTORY => $comp_dir,  
 );
 
-#   A hash of method names that TWS API (from IB) currently supports.  If a 
-#   new one is added in a later version of TWS, simply add it to this hash
-#   
-my %sub_of = (
-    cancelScannerSubscription => 1,
-    reqScannerParameters => 1,
-    reqScannerSubscription => 1,
-    reqMktData => 1,
-    cancelHistoricalData => 1,
-    reqHistoricalData => 1,
-    reqContractDetails => 1,
-    reqMktDepth => 1,
-    cancelMktData => 1,
-    cancelMktDepth => 1,
-    exerciseOptions => 1,
-    placeOrder => 1, 
-    reqAccountUpdates => 1,
-    reqExecutions => 1,
-    cancelOrder => 1,
-    reqOpenOrders => 1,
-    reqIds => 1,
-    reqNewsBulletins => 1,
-    cancelNewsBulletins => 1,
-    setServerLogLevel => 1,
-    reqAutoOpenOrders => 1,
-    reqAllOpenOrders => 1,
-    reqManagedAccts => 1,
-    requestFA => 1,
-    replaceFA => 1,
-);
-
 use Object::InsideOut; 
 {
 
     my @callback      :Field( Get      =>'callback'          );
     my @api           :Field( Get      =>'get_api'           );
     my @EClientSocket :Field( Get      =>'get_EClientSocket' );
+    my @config        :Field( Get      =>'get_config'        );
     
     my %init_args :InitArgs = (
         callback    => { Field=>\@callback, Mandatory => 1 },
@@ -90,8 +62,10 @@ use Object::InsideOut;
 
         my $socket = $self->EClientSocket->new($api);
         
-        $self->set(\@api, $api);
-        $self->set(\@EClientSocket, $socket);
+        $self->set(\@api,           $api );
+        $self->set(\@EClientSocket, $socket );
+        $self->set(\@config,        $self->get_conf_data() );
+
     }
  
     # A wrapper around Object::InsideOut's ->new() method just to 
@@ -103,14 +77,35 @@ use Object::InsideOut;
     }
 }
 
+#   I need to find out where this module is located so that I 
+#   can find the .conf file, can't do it the way I did it in the 
+#   BEGIN block because in testing the file isn't always in the same
+#   place
+sub get_conf_data {
+
+    my $self = shift;
+
+    my @dirs = File::Spec->splitpath(
+        $INC{'Finance/InteractiveBrokers/TWS.pm'}
+    );
+        
+    pop @dirs;
+    push @dirs, "tws.conf";
+    my $conf = File::Spec->catdir( @dirs ); 
+    my %config = ParseConfig(-ConfigFile => $conf);
+    
+    return \%config;
+}
+
+
 sub eConnect {
 
     my $self     = shift;
     my ($host, $port, $client_id) = @_;
-
-    $host      ||= 'localhost';
-    $port      ||= 7496;
-    $client_id ||= $$;
+    
+    $host      ||= ($ENV{TWS_HOST} || 'localhost');
+    $port      ||= ($ENV{TWS_PORT} || 7496);
+    $client_id = $$ unless defined $client_id;
 
     my $client_socket = $self->get_EClientSocket();
 
@@ -145,11 +140,13 @@ sub process_messages {
     $wait ||= .05;
     my $api = $self->get_api();
 
+    my $num_callbacks_processed = 0;
     while ($api->WaitForCallback($wait)) {
         $api->ProcessNextCallback();
+        $num_callbacks_processed++;
     }
     
-    return;
+    return $num_callbacks_processed;
 }
 
 sub AUTOLOAD {
@@ -163,15 +160,15 @@ sub AUTOLOAD {
 
     my $ec = $self->get_EClientSocket;
 
-    if (defined $sub_of{$sub_name}) {
-        $ec->$sub_name(@_);
+    
+    if (defined $self->get_config->{eclient}->{$sub_name}) {
+        return $ec->$sub_name(@_);
     }
     else {
         $self->eDisconnect();
         croak "no method: $sub_name defined\n";
     }
 
-    return;
 }
 
 #   Simple stubs to as shortcuts to the IB Java objects
@@ -206,6 +203,78 @@ sub Order {
 
 sub ScannerSubscription {
     return __PACKAGE__.'::com::ib::client::ScannerSubscription';
+}
+
+#   Dump the message
+sub dump_event {
+
+    my ($self, $event_name, $values_ref) = @_;
+
+    my $keys_ref = $self->get_config->{ewrapper}->{$event_name};
+
+    #   Short circuit if this is a new event name that we haven't defined
+    #   or the user passed in wrong event
+    if (! defined $keys_ref) {
+        print "No configuration data for event:  $event_name\n";
+        return;
+    }
+
+    #   Convert singletons to arrays
+    $keys_ref = ref $keys_ref ? $keys_ref : [$keys_ref];
+    tie my %hash, "Tie::IxHash";
+    
+    foreach my $idx (0..$#{@$keys_ref}) {
+
+        my $key   = $keys_ref->[$idx];
+        my $value = $values_ref->[$idx];
+
+        next if ! defined $value;
+
+        #   If the value is an object, dump it, and add the result
+        #   to the hash exploded, if the value is 
+        #   a plain scalar add it to the hash as is
+        if (my $obj_name = ref $value) {
+            $hash{$key} = $self->dump_java_object($value);
+        }
+        else {
+            $hash{$key} = $value;
+        }
+    }
+
+    use Data::Dumper;
+    print Dumper(\%hash);
+}
+
+#   Since you can't inspect an inline::java object the same way you can
+#   with a perl hash, you have to know the keys beforehand
+sub dump_java_object {
+
+    my ($self, $object) = @_;
+
+    my $object_type = lc ref $object;
+    $object_type =~ s/^.*:://;
+
+    my @keys = @{$self->get_config->{$object_type}};
+
+    return $self->_explode($object, \@keys);
+}
+
+#   Loop thru all the keys in the java object and write it to a hash, for the
+#   values who themselves are objects, recurse thru them
+sub _explode {
+
+    my ($self, $obj, $keys) = @_;
+    
+    tie my %hash, "Tie::IxHash";
+
+    foreach (@$keys) {
+        if ( defined $obj->{$_} ) {
+            $hash{$_} = ref $obj->{$_} ? $self->dump_java_object($obj->{$_})
+                                       : $obj->{$_};
+        }
+    }
+
+    return \%hash;
 }
 
 1;
@@ -326,7 +395,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     
 	public void updateAccountTime(String timeStamp) {
         try {
-            perlobj.InvokeMethod("tickPrice", new Object [] {
+            perlobj.InvokeMethod("updateAccountTime", new Object [] {
                     timeStamp
             });
         }
@@ -632,10 +701,40 @@ Returns a boolean of whether or not you are currently connected to the TWS
 
 =head3 process_messages
 
-Processes the messages the TWS has emitted.  It accepts a single optional parameter of how many seconds to listen for messages to process.  If no messages are found within the wait period, control is returned to the caller.
+Processes the messages the TWS has emitted.  It accepts a single optional parameter of how many seconds to listen for messages to process.  It returns the number of callbacks processed.  If no messages are found within the wait period, control is returned to the caller.
 
  my $seconds_to_wait = 2;
- $tws->process_messages($seconds_to_wait);
+ $number_of_callbacks_processed = $tws->process_messages($seconds_to_wait);
+
+=head3 dump_event
+
+This is a custom method that does not exist in the IB API.  Its useful for testing and debuging.  Simply call it passing the arguments received by the event handler "as is" along with the event name and it will print out the contents of the event in a pretty Data::Dumper format.
+
+An example inside the callback:
+ sub updateMktDepth {
+     my ($self, @args) = @_;
+
+     my $subname = 'updateMktDepth';
+ 
+     print "\n****Called $sub_name: \n";
+     my $obj = bless {}, 'callback';
+     my $tws = Finance::InteractiveBrokers::TWS->new($obj);
+     $tws->dump_event($sub_name, \@args);
+ 
+     return;
+ 
+ }
+
+Obviously, you wouldn't want to do it this way in your real code, since you'd be creating and destroying tws objects continuously.  But as an example its easy to see how to use it.
+
+=head3 dump_java_object
+
+Again a custom method that comes in handy when testing and debuging.  Since you can't use Data::Dumper on a java object like "contract" or "order", you need to explode it manually, pulling out all the keys
+
+Call it like:
+
+ $tws->dump_java_object($contract);
+
 
 =head2 Java methods
 
@@ -852,7 +951,7 @@ Again, these methods are described by IB on their website.
  
  while (1) {
  
-     if (defined $tws and $tws->isCconnected) {
+     if (defined $tws and $tws->isConnected) {
          $tws->process_messages(1);
      }
      else {
@@ -871,8 +970,7 @@ Again, these methods are described by IB on their website.
  
      ####                        Host         Port    Client_ID
      ####                        ----         ----    ---------
-     #my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
-     my @tws_GUI_location = qw/  pt    7496       15     /;
+     my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
  
      $tws->eConnect(@tws_GUI_location);
  
@@ -926,6 +1024,8 @@ and manually cast the variables into their types directly, like this:
 I don't feel like going through all the code to do this, especially since most
 people will be using Java 1.5 and above shortly
 
+Other errors during first time use - Please delete the installation and start over making sure you install as "root".  YOU MUST RUN THE tests.  The tests create a directory where the Inline::Java places some necessary files.
+
 =head1 CONFIGURATION AND ENVIRONMENT
 
 You need to compile the *.java API source files into java class files prior to using this module.  Do it like:
@@ -943,7 +1043,7 @@ Furthermore Finance::InteractiveBrokers::TWS does require that you set your CLAS
 
 =item * 
 
-Java SDK
+Java JDK/JRE version >= 1.5 - If you have a lower version there is a workaround see DIAGNOSTICS
 
 =item *
 

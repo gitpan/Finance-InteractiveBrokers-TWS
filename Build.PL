@@ -8,11 +8,17 @@ my $builder = Module::Build->new(
     dist_author         => 'Jay Strauss <tws_at_heyjay.com>',
     dist_version_from   => 'lib/Finance/InteractiveBrokers/TWS.pm',
     requires => {
-        'Test::More'   => 0,
-        'version'      => 0,
-        'Inline::Java' => .50_93,
+        'Config'            => 0,
+        'Config::General'   => 0,
+        'Data::Dumper'      => 0,
+        'File::Spec'        => 0,
+        'Inline::Java'      => .5092,
+        'Object::InsideOut' => 0,
+        'Test::More'        => 0,
+        'Tie::IxHash'       => 0,
+        'version'           => 0,
+
     },
-    add_to_cleanup      => [ 'Finance-InteractiveBrokers-TWS-*' ],
 );
 
 $builder->create_build_script();

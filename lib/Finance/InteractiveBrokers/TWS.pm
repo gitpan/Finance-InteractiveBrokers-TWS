@@ -1,6 +1,6 @@
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.7');
+use version; $VERSION = qv('0.0.8');
 
 use warnings;
 use strict;
@@ -318,8 +318,23 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaPerlException pe){ }
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
-    
-	public void orderStatus(int orderId, String status, int filled, 
+   
+    public void tickOptionComputation( int tickerId, int field, 
+                                       double impliedVolatility, double delta)
+    {
+        try {
+            perlobj.InvokeMethod("tickOptionComputation", new Object [] {
+                    tickerId, field, impliedVolatility, delta
+            });
+        }
+        catch (InlineJavaPerlException pe){ }
+        catch (InlineJavaException pe) { pe.printStackTrace() ;}
+    }
+   
+
+
+ 
+    public void orderStatus(int orderId, String status, int filled, 
                             int remaining, double avgFillPrice, int permId, 
                             int parentId, double lastFillPrice, int clientId) 
     {
@@ -333,7 +348,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void openOrder(int orderId, Contract contract, Order order) 
+    public void openOrder(int orderId, Contract contract, Order order) 
     {
         try {
             perlobj.InvokeMethod("openOrder", new Object [] {
@@ -344,7 +359,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void error(String str) 
+    public void error(String str) 
     {
         try {
             perlobj.InvokeMethod("error", new Object [] {
@@ -355,7 +370,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void connectionClosed() 
+    public void connectionClosed() 
     {
         try {
             perlobj.InvokeMethod("connectionClosed", new Object [] {
@@ -366,7 +381,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
     
     }
     
-	public void updateAccountValue(String key, String value, String currency, 
+    public void updateAccountValue(String key, String value, String currency, 
                                    String accountName) 
     {
         try {
@@ -393,7 +408,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void updateAccountTime(String timeStamp) {
+    public void updateAccountTime(String timeStamp) {
         try {
             perlobj.InvokeMethod("updateAccountTime", new Object [] {
                     timeStamp
@@ -425,7 +440,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void bondContractDetails(ContractDetails contractDetails) 
+    public void bondContractDetails(ContractDetails contractDetails) 
     {
         try {
             perlobj.InvokeMethod("bondContractDetails", new Object [] {
@@ -436,7 +451,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void execDetails(int orderId, Contract contract, 
+    public void execDetails(int orderId, Contract contract, 
                             Execution execution) {
     
         try {
@@ -448,7 +463,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void error(int id, int errorCode, String errorMsg) 
+    public void error(int id, int errorCode, String errorMsg) 
     {
         try {
             perlobj.InvokeMethod("error", new Object [] {
@@ -459,7 +474,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void updateMktDepth(int tickerId, int position, int operation, 
+    public void updateMktDepth(int tickerId, int position, int operation, 
                                int side, double price, int size) 
     {
         try {
@@ -471,7 +486,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void updateMktDepthL2(int tickerId, int position, 
+    public void updateMktDepthL2(int tickerId, int position, 
                                  String marketMaker, int operation, int side, 
                                  double price, int size) 
     {
@@ -485,7 +500,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void updateNewsBulletin(int msgId, int msgType, String message, 
+    public void updateNewsBulletin(int msgId, int msgType, String message, 
                                    String origExchange) 
     {
         try {
@@ -497,7 +512,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void managedAccounts(String accountsList) 
+    public void managedAccounts(String accountsList) 
     {
         try {
             perlobj.InvokeMethod("managedAccounts", new Object [] {
@@ -508,7 +523,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void receiveFA(int faDataType, String xml) 
+    public void receiveFA(int faDataType, String xml) 
     {
         try {
             perlobj.InvokeMethod("receiveFA", new Object [] {
@@ -544,7 +559,7 @@ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
         catch (InlineJavaException pe) { pe.printStackTrace() ;}
     }
     
-	public void scannerData(int reqId, int rank, 
+    public void scannerData(int reqId, int rank, 
                             ContractDetails contractDetails, String distance, 
                             String benchmark, String projection) {
         try {
@@ -893,6 +908,7 @@ http://www.interactivebrokers.com/php/webhelp/Interoperability/Socket_Client_Jav
 
 But in general, you will have methods in your callback like:
 
+
  sub tickPrice {
     my ($self, @args) = @_;
     
@@ -998,7 +1014,21 @@ There is a Wiki for TWS at: http://chuckcaplan.com/twsapi/
 
 =head1 DIAGNOSTICS
 
- Finance::InteractiveBrokers::TWS::java::lang::NullPointerException=HASH(0x8b671cc)
+If you receive an error something like:
+
+=head2 Inline_Bridge is not abstract and does not override abstract method...
+
+ The error message was:
+ TWS_581d.java:6: Inline_Bridge is not abstract and does not override abstract method tickOptionComputation(int,int,double,double) in com.ib.client.EWrapper
+ class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
+^
+ 1 error
+
+It means that this module (Finance::InteractiveBrokers::TWS) is not up to date with the current IB API version you have installed.  Specifically, this module is missing a new method implemented by the API.
+
+The easiest fix is to look at the specification of the method (in this case tickOptionComputation), in the EWrapper.java file in the IBJts/java/com/ib/client directory where you installed the IB API, and implement it in the __Java__ section of this module.  Additionally, add the appropriate entry into the tws.conf file (Its really simple code, I promise you can figure it out, just copy and paste a different section).  Then do a "make realclean && perl Makefile.PL && make && make test" and see if that fixes the compile error.
+
+=head2  Finance::InteractiveBrokers::TWS::java::lang::NullPointerException=HASH(0x8b671cc)
  
 This means you did not supply a callback object when you instantiated a Finance::IB:TWS object.
 
@@ -1024,7 +1054,9 @@ and manually cast the variables into their types directly, like this:
 I don't feel like going through all the code to do this, especially since most
 people will be using Java 1.5 and above shortly
 
-Other errors during first time use - Please delete the installation and start over making sure you install as "root".  YOU MUST RUN THE tests.  The tests create a directory where the Inline::Java places some necessary files.
+=head2 Other errors during first time use
+
+Please delete the installation and start over making sure you install as "root".  YOU MUST RUN THE tests.  The tests create a directory where the Inline::Java places some necessary files.
 
 =head1 CONFIGURATION AND ENVIRONMENT
 
@@ -1049,9 +1081,25 @@ Java JDK/JRE version >= 1.5 - If you have a lower version there is a workaround 
 
 InteractiveBrokers TWS GUI application
 
+=item *
+
+Inline
+
 =item * 
 
 Inline::Java v.50_92 or greater
+
+=item *
+
+Object::InsideOut
+
+=item *
+
+Tie::IxHash;
+
+=item *
+
+Config::General;
 
 =back
 

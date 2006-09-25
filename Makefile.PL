@@ -13,6 +13,7 @@ WriteMakefile(
         'Config::General'   => 0,
         'Data::Dumper'      => 0,
         'File::Spec'        => 0,
+        'Inline'            => 0,
         'Inline::Java'      => .5092,
         'Object::InsideOut' => 0,
         'Test::More'        => 0,

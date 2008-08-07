@@ -51,11 +51,8 @@ DEPENDENCIES
     TWS Java API
     Inline
     Inline::Java
-    Object::InsideOut
-    Tie::IxHash
+    Class::InsideOut
     File::Spec
-    Config::General
-    Data::Dumper
 
 
 COPYRIGHT AND LICENCE

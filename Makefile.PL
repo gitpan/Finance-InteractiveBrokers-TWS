@@ -9,15 +9,11 @@ WriteMakefile(
     ABSTRACT_FROM       => 'lib/Finance/InteractiveBrokers/TWS.pm',
     PL_FILES            => {},
     PREREQ_PM => {
-        'Config'            => 0,
-        'Config::General'   => 0,
-        'Data::Dumper'      => 0,
         'File::Spec'        => 0,
         'Inline'            => 0,
         'Inline::Java'      => .5092,
-        'Object::InsideOut' => 0,
+        'Class::InsideOut'  => 0,
         'Test::More'        => 0,
-        'Tie::IxHash'       => 0,
         'version'           => 0,
         
     },
@@ -28,13 +24,13 @@ WriteMakefile(
 use Config;
 use File::Spec;
 
-my $comp_dir = $Config{sitelib};
+#my $comp_dir = $Config{sitelib};
 
-foreach (qw/Finance InteractiveBrokers TWS _Inline/) {
-
-    $comp_dir = File::Spec->catfile($comp_dir, $_);
-    mkdir $comp_dir;
-}
+#foreach (qw/Finance InteractiveBrokers TWS _Inline/) {
+#
+#    $comp_dir = File::Spec->catfile($comp_dir, $_);
+#    mkdir $comp_dir;
+#}
 
 #   Need to fix this to look for TWS_HOST parm
 # 

@@ -1,5 +1,12 @@
 Revision history for Finance-InteractiveBrokers-TWS
 
+0.1.0  2008/08/03
+
+    - Kinda ripped it apart and rebuilt using a way to dynamically 
+      learn about the EWrapper and create corresponding code.
+    - Made it more logically to request objects directly from IB's Java
+      rather than having code in this module
+
 0.0.8  2006/09/25
 
     - Added method tickOptionComputation

@@ -1,641 +1,367 @@
+#!/usr/bin/perl
+
 package Finance::InteractiveBrokers::TWS;
 
-use version; $VERSION = qv('0.0.8');
+use version; $VERSION = qv('0.1.0');
 
 use warnings;
 use strict;
-use Carp;
-use Tie::IxHash;
-use Config::General;
+use File::Spec;
+use Data::Dumper;
 
-#   Define comp_dir to hold the location for where we 
-#   want Inline::Java to complile its Java files.  Otherwise
-#   Inline will create them in the pwd of the executed script
-my $comp_dir;
+use Class::InsideOut qw(:std);
 
-BEGIN {
-    use Config;
-    use File::Spec;
-    $comp_dir = File::Spec->catfile(
-        $Config{sitelib},
-        split(/::/,__PACKAGE__),
-        "_Inline",
-    );
+#	Define class attributes
+#
+readonly api_path   => my %api_path;
+readonly IB_classes => my %IB_classes;
+readonly api_spec   => my %api_spec;
+readonly java_src   => my %java_src;
+readonly jcode      => my %jcode;
+readonly eclient    => my %eclient;
+
+sub new { 
+
+	my $self     = register( shift );
+	my $callback = shift;
+
+	$callback || die 
+	   "\n*** You MUST supply a callback to create a TWS object\n\n";
+
+	$api_path   {id $self} = $self->get_tws_api_install_path();
+	$IB_classes {id $self} = $self->get_list_ref_of_classes();
+	$api_spec   {id $self} = $self->learn_EWrapper_spec();
+	$java_src   {id $self} = $self->build_java_src();
+
+	$self->compile_java_src();
+	$self->create_subroutines();
+
+	my $jcode = Finance::InteractiveBrokers::TWS::Inline_Java->new($callback);
+	$jcode{id $self} = $jcode;
+
+	my $eclient = $self->EClientSocket->new($jcode);
+	$eclient{id $self} = $eclient;
+
+	$jcode->OpenCallbackStream();
+
+	return $self;
 }
 
-use Inline (
-    Java        => "DATA",
-    JNI         => 1,
-    AUTOSTUDY   => 1,
-    STUDY => [ 
-              'com.ib.client.ComboLeg',
-              'com.ib.client.ContractDetails',
-              'com.ib.client.Contract',
-              'com.ib.client.EClientSocket',
-              'com.ib.client.ExecutionFilter',
-              'com.ib.client.Execution',
-              'com.ib.client.Order',
-              'com.ib.client.ScannerSubscription',
-             ],
-    # complile Java in specific directory
-    DIRECTORY => $comp_dir,  
-);
+=begin build_java_src 
 
-use Object::InsideOut; 
-{
+I need to build a Java class that looks like the following with a whole
+bunch of duplicate methods, one for each event the TWS emits.  Rather
+than hard code the Java class, I build it on the fly by reading the
+EWrapper as compiled by INLINE.  Then I return the source which
+looks like:
 
-    my @callback      :Field( Get      =>'callback'          );
-    my @api           :Field( Get      =>'get_api'           );
-    my @EClientSocket :Field( Get      =>'get_EClientSocket' );
-    my @config        :Field( Get      =>'get_config'        );
-    
-    my %init_args :InitArgs = (
-        callback    => { Field=>\@callback, Mandatory => 1 },
-    );
+	import org.perl.inline.java.*;
+	import com.ib.client.*;
 
-    sub _init :Init {
-        my ($self, $args) = @_;
+	class Inline_Java extends InlineJavaPerlCaller implements EWrapper {
 
-        my $api    = Finance::InteractiveBrokers::TWS::Inline_Bridge->new( 
-                        $callback[$$self]
-                     );
+	InlineJavaPerlObject perlobj;
 
-        my $socket = $self->EClientSocket->new($api);
-        
-        $self->set(\@api,           $api );
-        $self->set(\@EClientSocket, $socket );
-        $self->set(\@config,        $self->get_conf_data() );
+    	public Inline_Java(InlineJavaPerlObject PerlObj)
+    	throws InlineJavaException {
+       	perlobj = PerlObj;
+    	}
 
-    }
- 
-    # A wrapper around Object::InsideOut's ->new() method just to 
-    # simplify the call to this module as a single parm call as opposed 
-    # to using a hash
-    sub new { 
-	    my ($class, $callback) = @_;
-	    return $class->Object::InsideOut::new(callback => $callback);
-    }
+    	public void tickPrice(int tickerId, int field, double price,
+                          int canAutoExecute)
+
+    	{
+       	try {
+            		perlobj.InvokeMethod("tickPrice", new Object [] {
+			tickerId, field, price, canAutoExecute }); 
+		}
+        	catch (InlineJavaPerlException pe){ }
+        	catch (InlineJavaException pe) { pe.printStackTrace() ;}
+	}
+  ...
+  ...
+  ...
+  }
+
+=end build_java_src
+
+=cut
+sub build_java_src {
+
+	my $self = shift;
+
+	my $src = <<"	END";
+	import org.perl.inline.java.*;
+        import com.ib.client.*;
+
+	class Inline_Java extends InlineJavaPerlCaller implements EWrapper {
+
+	InlineJavaPerlObject perlobj;
+
+	public Inline_Java(InlineJavaPerlObject PerlObj)
+	throws InlineJavaException { perlobj = PerlObj; }
+
+	END
+
+	foreach my $method_def_ref (@{$self->api_spec()}) {
+
+		my ($method_name, $parm_list_ref) = @$method_def_ref;
+ 		
+		# I need to remove the 'java.lang' from 'java.lang.String'
+		# and the 'com.ib.client' from 'com.ib.client.Contract'
+		# etc.. that gets stuck on some of the attributes
+		my @clean = map { (split/\./)[-1] } @{$parm_list_ref};
+
+		my $str0 = join ',', map {$clean[$_]." var".$_} 0..$#clean;
+		my $str1 = join ',', map {"var".$_} 0..$#clean;
+	
+		$src .= sprintf("\tpublic void %s(%s) {
+            try {
+                perlobj.InvokeMethod(\"%s\", new Object [] {
+                        %s
+                });
+            }
+            catch (InlineJavaPerlException pe){ }
+            catch (InlineJavaException pe) { pe.printStackTrace() ;}\n\n\t}",
+		 $method_name, $str0, $method_name, $str1);
+	}
+
+	$src .= '}';
+
+	return $src;
 }
 
-#   I need to find out where this module is located so that I 
-#   can find the .conf file, can't do it the way I did it in the 
-#   BEGIN block because in testing the file isn't always in the same
-#   place
-sub get_conf_data {
 
-    my $self = shift;
+=for compile_java_src 
+Take the Java source created in this module and compile it, also study
+all the IB supplied classes, so we can use them.
 
-    my @dirs = File::Spec->splitpath(
-        $INC{'Finance/InteractiveBrokers/TWS.pm'}
-    );
-        
-    pop @dirs;
-    push @dirs, "tws.conf";
-    my $conf = File::Spec->catdir( @dirs ); 
-    my %config = ParseConfig(-ConfigFile => $conf);
-    
-    return \%config;
+=cut
+sub compile_java_src {
+
+	my $self = shift;
+
+	# Prepend 'com.ib.client' to each class, for proper pathing in STUDY
+	my @class_list = map {'com.ib.client.'.$_} @{$self->IB_classes()};
+
+	Inline->bind(
+		Java => $self->java_src(),
+      AUTOSTUDY => 1,
+      STUDY => \@class_list,
+      );
+	
+	return 0;
 }
 
+=begin create_subroutines
 
-sub eConnect {
+	I (at time of writing) create the following subroutines DYNAMICALLY:
 
-    my $self     = shift;
-    my ($host, $port, $client_id) = @_;
-    
-    $host      ||= ($ENV{TWS_HOST} || 'localhost');
-    $port      ||= ($ENV{TWS_PORT} || 7496);
-    $client_id = $$ unless defined $client_id;
+	   EClientErrors
+	   AnyWrapper
+	   Execution
+	   EWrapperMsgGenerator
+	   ExecutionFilter
+	   EWrapper
+	   EClientSocket
+	   TickType
+	   OrderState
+	   EReader
+	   ScannerSubscription
+	   AnyWrapperMsgGenerator
+	   ContractDetails
+	   Order
+	   ComboLeg
+	   Util
+	   EClientErrors$CodeMsgPair
+	   Contract
 
-    my $client_socket = $self->get_EClientSocket();
+	These are simple, convenience subs that call the IB supplied class.  So that
+	the user (or me) can do:
 
-    $client_socket->eConnect($host, $port, $client_id);
+		my $contract = $object->Contract(...);
 
-    $self->get_api->OpenCallbackStream();
+	 to create an IB contract instead of having to do
+	
+	   my $contract = 
+	     Finance::InteractiveBrokers::TWS::com::ib::client::Contract->new(...);
 
-    my $wait = 2;
-    print "$wait second wait - while TWS connection process completes\n";
-    $self->process_messages($wait);
 
-    return $self->isConnected();
+	The subroutines I create look like:
+
+	   sub Contract {
+	      return __PACKAGE__.'::com::ib::client::Contract';
+	   }
+
+=end create_subroutines
+
+=cut
+
+sub create_subroutines {
+
+	my $self = shift;
+
+	{  # localize "no strict 'refs'" to this block
+		no strict 'refs';
+		
+		foreach my $class_name (@{$self->IB_classes()}) {
+
+			*{ $class_name } = 
+			   sub { return __PACKAGE__.'::com::ib::client::'.$class_name };
+
+		}
+	}
 }
 
-sub eDisconnect {
-    my $self = shift;
-    $self->get_EClientSocket->eDisconnect();
-    $self->process_messages();
-    
-    return ! $self->isConnected(); # negate so that returns true on success
+=for get_list_ref_of_classes
+	I read the list of files in the API directory whose name ends in 
+	*.class, remove the .class from the name and return a list of class names
+
+=cut
+sub get_list_ref_of_classes {
+
+	my $self = shift;
+	
+	opendir(DIR, $self->api_path() ) || die 
+		"can not opendir \'".$self->api_path(),"\': $!";
+
+	# CAREFUL this grep uses a search and replace to remove ".class"
+	# from the filename in addition to the match
+	my @classes = grep { s/\.class// } readdir(DIR);
+
+	closedir DIR;
+
+	return \@classes;
 }
 
-sub isConnected {
-    my $self = shift;
-    return $self->get_EClientSocket->isConnected();
+=for get_tws_api_install_path 
+	get_tws_api_install_path, simply looks through the CLASSPATH environmental
+	variable and finds the path for the likely TWS installation, the way I do
+	it is probably not bullet proof, that is looking for a path with IBJts 
+	or jts, but it works for me.
+
+=cut
+sub get_tws_api_install_path {
+
+	my $self = shift;
+
+	defined $ENV{'CLASSPATH'} || die "\nCLASSPATH not set\n\n";
+	my ($API_base) = grep {/(IBJts)|(jts)/} split(/[:;]/, $ENV{CLASSPATH});
+
+	my @path = File::Spec->splitdir($API_base);
+	push @path, qw[com ib client];
+	my $path = File::Spec->catfile(@path);
+
+	return $path;
 }
 
-sub process_messages {
+=for learn_EWrapper_spec 
+	I complile the IB supplied EWrapper with Inline::Java, and then plumb
+	the debths of the structure created to learn the methods within the EWrapper
+	and number and type of parameters to each method, so that I may later
+	use that info, to dynamically build my own Wrapper
 
-    my ($self, $wait) = @_;
+=cut
+sub learn_EWrapper_spec {
 
-    $wait ||= .05;
-    my $api = $self->get_api();
+	my $self = shift;
 
-    my $num_callbacks_processed = 0;
-    while ($api->WaitForCallback($wait)) {
-        $api->ProcessNextCallback();
-        $num_callbacks_processed++;
-    }
-    
-    return $num_callbacks_processed;
+	use Inline (
+		Java => 'STUDY',
+		AUTOSTUDY => 1,
+		STUDY => ['com.ib.client.EWrapper'],
+	);
+
+	my $package_name = __PACKAGE__.'::com::ib::client::EWrapper';
+	my $inlines = (Inline::Java::__get_INLINES)[0]->[0]{ILSM}{data}[1];
+
+	my $ewrapper_methods_ref = $inlines->{classes}{$package_name}{methods};
+
+	my @spec = ();
+
+	# Build a [[method_name, @parms], [method_name, @parms]]
+	while (my ($method_name, $value) = each %{$ewrapper_methods_ref}) {
+
+		while (my ($key, $ivalue) = each %{$value}) {
+	
+			push @spec, [$method_name, $ivalue->{SIGNATURE}] 
+				if $ivalue->{SIGNATURE};
+		}
+	}
+
+	return \@spec;
 }
 
-sub AUTOLOAD {
-    my $self = shift;
-    my @args = @_;
+=for read_messages_for_x_sec 
+Call our implementation of EWrapper to process the messages emitted from
+the TWS.  When the messages are read it will trigger the code in the callback
+supplied by the user.
 
-    our $AUTOLOAD;
+=cut
+sub read_messages_for_x_sec {
 
-    my $sub_name = $AUTOLOAD;
-    $sub_name =~ s/^.*:://;
+   my ($self, $wait) = @_;
 
-    my $ec = $self->get_EClientSocket;
+   $wait ||= .05;
+   my $jcode = $self->jcode(); 
 
-    
-    if (defined $self->get_config->{eclient}->{$sub_name}) {
-        return $ec->$sub_name(@_);
-    }
-    else {
-        $self->eDisconnect();
-        croak "no method: $sub_name defined\n";
-    }
+   my $num_callbacks_processed = 0;
+   while ($jcode->WaitForCallback($wait)) {
+       $jcode->ProcessNextCallback();
+       $num_callbacks_processed++;
+   }
 
-}
-
-#   Simple stubs to as shortcuts to the IB Java objects
-#   
-sub ComboLeg {
-    return __PACKAGE__.'::com::ib::client::ComboLeg';
-}
-
-sub ContractDetails {
-    return __PACKAGE__.'::com::ib::client::ContractDetails';
-}
-
-sub Contract {
-    return __PACKAGE__.'::com::ib::client::Contract';
-}
-
-sub EClientSocket {
-    return __PACKAGE__.'::com::ib::client::EClientSocket';
-}
-
-sub ExecutionFilter {
-    return __PACKAGE__.'::com::ib::client::ExecutionFilter';
-}
-
-sub Execution {
-    return __PACKAGE__.'::com::ib::client::Execution';
-}
-
-sub Order {
-    return __PACKAGE__.'::com::ib::client::Order';
-}
-
-sub ScannerSubscription {
-    return __PACKAGE__.'::com::ib::client::ScannerSubscription';
-}
-
-#   Dump the message
-sub dump_event {
-
-    my ($self, $event_name, $values_ref) = @_;
-
-    my $keys_ref = $self->get_config->{ewrapper}->{$event_name};
-
-    #   Short circuit if this is a new event name that we haven't defined
-    #   or the user passed in wrong event
-    if (! defined $keys_ref) {
-        print "No configuration data for event:  $event_name\n";
-        return;
-    }
-
-    #   Convert singletons to arrays
-    $keys_ref = ref $keys_ref ? $keys_ref : [$keys_ref];
-    tie my %hash, "Tie::IxHash";
-    
-    foreach my $idx (0..$#{@$keys_ref}) {
-
-        my $key   = $keys_ref->[$idx];
-        my $value = $values_ref->[$idx];
-
-        next if ! defined $value;
-
-        #   If the value is an object, dump it, and add the result
-        #   to the hash exploded, if the value is 
-        #   a plain scalar add it to the hash as is
-        if (my $obj_name = ref $value) {
-            $hash{$key} = $self->dump_java_object($value);
-        }
-        else {
-            $hash{$key} = $value;
-        }
-    }
-
-    use Data::Dumper;
-    print Dumper(\%hash);
-}
-
-#   Since you can't inspect an inline::java object the same way you can
-#   with a perl hash, you have to know the keys beforehand
-sub dump_java_object {
-
-    my ($self, $object) = @_;
-
-    my $object_type = lc ref $object;
-    $object_type =~ s/^.*:://;
-
-    my @keys = @{$self->get_config->{$object_type}};
-
-    return $self->_explode($object, \@keys);
-}
-
-#   Loop thru all the keys in the java object and write it to a hash, for the
-#   values who themselves are objects, recurse thru them
-sub _explode {
-
-    my ($self, $obj, $keys) = @_;
-    
-    tie my %hash, "Tie::IxHash";
-
-    foreach (@$keys) {
-        if ( defined $obj->{$_} ) {
-            $hash{$_} = ref $obj->{$_} ? $self->dump_java_object($obj->{$_})
-                                       : $obj->{$_};
-        }
-    }
-
-    return \%hash;
+   return $num_callbacks_processed;
 }
 
 1;
 
-__DATA__
-__Java__
-
-import org.perl.inline.java.*;
-import com.ib.client.*;
-
-
-class Inline_Bridge extends InlineJavaPerlCaller implements EWrapper {
-
-    InlineJavaPerlObject perlobj;
-
-    public Inline_Bridge(InlineJavaPerlObject PerlObj) 
-    throws InlineJavaException {
-        perlobj = PerlObj;
-    }
-
-    public void tickPrice(int tickerId, int field, double price, 
-                          int canAutoExecute) 
-    
-    {
-        try {
-            perlobj.InvokeMethod("tickPrice", new Object [] {
-                    tickerId, field, price, canAutoExecute
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-
-    public void tickSize(int tickerId, int field, int size) 
-    {
-        try {
-            perlobj.InvokeMethod("tickSize", new Object [] {
-                    tickerId, field, size
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-   
-    public void tickOptionComputation( int tickerId, int field, 
-                                       double impliedVolatility, double delta)
-    {
-        try {
-            perlobj.InvokeMethod("tickOptionComputation", new Object [] {
-                    tickerId, field, impliedVolatility, delta
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-   
-
-
- 
-    public void orderStatus(int orderId, String status, int filled, 
-                            int remaining, double avgFillPrice, int permId, 
-                            int parentId, double lastFillPrice, int clientId) 
-    {
-        try {
-            perlobj.InvokeMethod("orderStatus", new Object [] {
-                orderId, status, filled, remaining, avgFillPrice,
-                permId, parentId, lastFillPrice, clientId
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void openOrder(int orderId, Contract contract, Order order) 
-    {
-        try {
-            perlobj.InvokeMethod("openOrder", new Object [] {
-                orderId, contract, order
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void error(String str) 
-    {
-        try {
-            perlobj.InvokeMethod("error", new Object [] {
-                str
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void connectionClosed() 
-    {
-        try {
-            perlobj.InvokeMethod("connectionClosed", new Object [] {
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    
-    }
-    
-    public void updateAccountValue(String key, String value, String currency, 
-                                   String accountName) 
-    {
-        try {
-            perlobj.InvokeMethod("updateAccountValue", new Object [] {
-                key, value, currency, accountName
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    
-    }
-
-    public void updatePortfolio(Contract contract, int position, 
-                                double marketPrice, double marketValue,
-                                double averageCost, double unrealizedPNL, 
-                                double realizedPNL, String accountName) {
-        try {
-            perlobj.InvokeMethod("updatePortfolio", new Object [] {
-                contract, position, marketPrice, marketValue,
-                averageCost, unrealizedPNL, realizedPNL, accountName
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void updateAccountTime(String timeStamp) {
-        try {
-            perlobj.InvokeMethod("updateAccountTime", new Object [] {
-                    timeStamp
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void nextValidId(int orderId) 
-    {
-        try {
-            perlobj.InvokeMethod("nextValidId", new Object [] {
-                orderId
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-	
-    public void contractDetails(ContractDetails contractDetails) 
-    {
-        try {
-            perlobj.InvokeMethod("contractDetails", new Object [] {
-                contractDetails
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void bondContractDetails(ContractDetails contractDetails) 
-    {
-        try {
-            perlobj.InvokeMethod("bondContractDetails", new Object [] {
-                contractDetails
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void execDetails(int orderId, Contract contract, 
-                            Execution execution) {
-    
-        try {
-            perlobj.InvokeMethod("execDetails", new Object [] {
-                orderId, contract, execution
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void error(int id, int errorCode, String errorMsg) 
-    {
-        try {
-            perlobj.InvokeMethod("error", new Object [] {
-                id, errorCode, errorMsg
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void updateMktDepth(int tickerId, int position, int operation, 
-                               int side, double price, int size) 
-    {
-        try {
-            perlobj.InvokeMethod("updateMktDepth", new Object [] {
-                tickerId, position, operation, side, price, size
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void updateMktDepthL2(int tickerId, int position, 
-                                 String marketMaker, int operation, int side, 
-                                 double price, int size) 
-    {
-        try {
-            perlobj.InvokeMethod("updateMktDepthL2", new Object [] {
-                tickerId, position, marketMaker, operation,
-                side, price, size
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void updateNewsBulletin(int msgId, int msgType, String message, 
-                                   String origExchange) 
-    {
-        try {
-            perlobj.InvokeMethod("updateNewsBulletin", new Object [] {
-                msgId, msgType, message, origExchange
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void managedAccounts(String accountsList) 
-    {
-        try {
-            perlobj.InvokeMethod("managedAccounts", new Object [] {
-                accountsList
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void receiveFA(int faDataType, String xml) 
-    {
-        try {
-            perlobj.InvokeMethod("receiveFA", new Object [] {
-                faDataType, xml
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-
-    }
-	
-    public void historicalData(int reqId, String date, double open, 
-                               double high, double low, double close, 
-                               int volume, double WAP, boolean hasGaps) 
-    {
-        try {
-            perlobj.InvokeMethod("historicalData", new Object [] {
-                reqId, date, open, high, low,
-                close, volume, WAP, hasGaps
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-	
-    public void scannerParameters(String xml) {
-        try {
-            perlobj.InvokeMethod("scannerParameters", new Object [] {
-                xml
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-    
-    public void scannerData(int reqId, int rank, 
-                            ContractDetails contractDetails, String distance, 
-                            String benchmark, String projection) {
-        try {
-            perlobj.InvokeMethod("scannerData", new Object [] {
-                reqId, rank, contractDetails, distance,
-                benchmark, projection
-            });
-        }
-        catch (InlineJavaPerlException pe){ }
-        catch (InlineJavaException pe) { pe.printStackTrace() ;}
-    }
-}
-
 __END__
+
+=pod
 
 =head1 NAME
 
 Finance::InteractiveBrokers::TWS - Lets you talk to Interactivebrokers Trader's Workstation using Perl.
 
-This module is a wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.  This means that all the functionality available to Java programmers is also available to you.
+This module is a lightweight wrapper around InteractiveBroker's Trader's Workstation (TWS) Java interface, that lets one interact with the TWS using Perl, via the vendor supplied API.  This means that all the functionality available to Java programmers is also available to you.
+
+To successfully use this module you will need to familiarize yourself with the IB java code supplied in the API.
 
 =head1 VERSION
 
-0.0.6 - Still Alpha since bugs are being found and the interface is changing.  But all in all it seems to work quite nicely
+0.1.0 - Still alpha code.  But its been redesigned to be more compatible with changes to the IB API.  It works well with my limited tests.
+
+** WARNING ** This version is incompatible with previous versions of this module. 
 
 =head1 SYNOPSIS
 
-=head2 Methods implemented by Finance::InteractiveBrokers::TWS
+	my $callback = My::Custom_Callback_Code->new();
+	my $tws      = Finance::InteractiveBrokers::TWS->new($callback);
 
- use Finance::InteractiveBrokers::TWS;
- 
- my $tws = Finance::InteractiveBrokers::TWS->new(callback=>$callback);
- 
- my $callback         = $tws->get_callback();
- my $rc               = $tws->eConnect($host, $port, $client_id);
- my $rc               = $tws->eDisconnect();
- my $rc               = $tws->isConnected(@parms);
- my $rc               = $tws->process_messages($seconds_to_wait);
+	#                           Host         Port    Client_ID
+	#                           ----         ----    ---------
+	my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
 
-=head2 Shortcuts for instantiating IB Java classes
+	$tws->eclient->eConnect(@tws_GUI_location);
+	do {$tws->read_messages_for_x_sec()} until $tws->eclient-isConnected();
 
- my $combo_leg        = $tws->ComboLeg->new(@parms);
- my $contract_details = $tws->ContractDetails->new(@parms);
- my $contract         = $tws->Contract->new(parms);
- my $execution_filter = $tws->ExecutionFilter->new(@parms);
- my $execution        = $tws->Execution->new(@parms);
- my $order            = $tws->Order->new(@parms);
- my $scanner_sub      = $tws->ScannerSubscription->new(@parms);
+	#  Create a contract
+	#
+	my $contract    = $tws->Contract->new();
 
-=head2 Shortcuts for asking TWS to do something for you
-  
- $tws->cancelHistoricalData(@parms);
- $tws->cancelMktData(@parms);
- $tws->cancelMktDepth(@parms);
- $tws->cancelNewsBulletins(@parms);
- $tws->cancelOrder(@parms);
- $tws->cancelScannerSubscription(@parms);
- $tws->exerciseOptions(@parms);
- $tws->placeOrder(@parms);
- $tws->replaceFA(@parms);
- $tws->reqAccountUpdates(@parms);
- $tws->reqAllOpenOrders(@parms);
- $tws->reqAutoOpenOrders(@parms);
- $tws->reqContractDetails(@parms);
- $tws->reqExecutions(@parms);
- $tws->reqHistoricalData(@parms);
- $tws->reqIds(@parms);
- $tws->reqManagedAccts(@parms);
- $tws->reqMktData(@parms);
- $tws->reqMktDepth(@parms);
- $tws->reqNewsBulletins(@parms);
- $tws->reqOpenOrders(@parms);
- $tws->reqScannerParameters(@parms);
- $tws->reqScannerSubscription(@parms);
- $tws->requestFA(@parms);
- $tws->setServerLogLevel(@parms);
+	#	Set the values
+	$contract->{m_conId}    = 50;
+	$contract->{m_symbol}   = 'AAPL';
+	$contract->{m_secType}  = 'STK';
+	$contract->{m_exchange} = 'SMART';
+
+	my $contract_id = 50;     # this can be any number you want
+	$tws->eclient->reqMktData($contract_id, $contract,"","");
+
+	while(1) {
+		$tws->read_messages_for_x_sec();
+	}
 
 =head1 DESCRIPTION
 
@@ -669,234 +395,62 @@ Whenever IB changes something I'd have to diff the old API versus the new API an
 
 =back
 
-=head2 Class methods
+=head1 USAGE
+
+=head2 Class Methods
 
 The following methods are provided by the Finance::InteractiveBrokers::TWS class
 
 =head3 new
 
-Sorta obvious, this instantiates an object of class Finance::InteractiveBrokers::TWS.  It requires a single parameter: a callback object.  That is, you (the user) has to write an class that can handle messages that the TWS will send to this client.
+Sorta obvious, this instantiates an object of class Finance::InteractiveBrokers::TWS.  It requires a single parameter: a callback object.  That is, you (the user) has to write a class that can handle the messages that the TWS will emit.
 
  my $tws = Finance::InteractiveBrokers::TWS->new($callback);
 
-=head3 get_callback
-
-Simply returns the callback you supplied when you instantiated this class.  Provided in case you need to pass around your $tws and want to access data you might have cached away in your callback
-
- my $callback = $tws->get_callback();
-
-
-=head3 eConnect
-
-Establishes (or tries to) a connection to the TWS defined in its parameters.  It accepts 3 parameters: 
-
-=over 4
-
-=item 1 IP address or Host name - DEFAULTS to localhost
-
-=item 2 The port upon which TWS is accepting connections - DEFAULTS to 7496
-
-=item 3 The client ID - DEFAULTS to process id
-
-=back
-
- my $boolean = $tws->eConnect($host, $port, $client_id)
-
-=head3 eDisconnect
-
-Disconnects from the TWS, and returns a boolean of success or failure in disconnection.
-
- my $booean = $tws->eDisconnect();
-
-=head3 isConnected
-
-Returns a boolean of whether or not you are currently connected to the TWS
-
- my $boolean = $tws->isConnected();
-
-=head3 process_messages
+=head3 read_messages_for_x_sec
 
 Processes the messages the TWS has emitted.  It accepts a single optional parameter of how many seconds to listen for messages to process.  It returns the number of callbacks processed.  If no messages are found within the wait period, control is returned to the caller.
 
  my $seconds_to_wait = 2;
- $number_of_callbacks_processed = $tws->process_messages($seconds_to_wait);
+ my $quantity = $tws->read_messages_for_x_sec($seconds_to_wait);
 
-=head3 dump_event
+=head2 IB Methods
 
-This is a custom method that does not exist in the IB API.  Its useful for testing and debuging.  Simply call it passing the arguments received by the event handler "as is" along with the event name and it will print out the contents of the event in a pretty Data::Dumper format.
+Once you've instantiated a Finance::InteractiveBrokers::TWS object you make the same calls that some one working directly in Java would make to the API.  You do this via the "eclient" method of $tws.
 
-An example inside the callback:
- sub updateMktDepth {
-     my ($self, @args) = @_;
+For example when you want to connect to the TWS you issue:
 
-     my $subname = 'updateMktDepth';
- 
-     print "\n****Called $sub_name: \n";
-     my $obj = bless {}, 'callback';
-     my $tws = Finance::InteractiveBrokers::TWS->new($obj);
-     $tws->dump_event($sub_name, \@args);
- 
-     return;
- 
- }
+ $tws->eclient->eConnect(@tws_GUI_location);
 
-Obviously, you wouldn't want to do it this way in your real code, since you'd be creating and destroying tws objects continuously.  But as an example its easy to see how to use it.
+Or if you want to request some market data you issue:
 
-=head3 dump_java_object
+ $tws->eclient->reqMktData($contract_id, $contract,"","");
 
-Again a custom method that comes in handy when testing and debuging.  Since you can't use Data::Dumper on a java object like "contract" or "order", you need to explode it manually, pulling out all the keys
+Or to find out if you're connected to TWS:
 
-Call it like:
+ my $connection_status = $tws->eclient->isConnected();
 
- $tws->dump_java_object($contract);
+You get the idea!
 
+=head2 IB Objects
 
-=head2 Java methods
+To interact with the TWS via the API one needs to create various objects supplied by IB, such as Contracts, Orders, ComboLegs... All the objects supplied by IB are available to this module.  To instantiate any IB class, use the $tws you've created
 
-The following methods are not implemented by Finance::InteractiveBrokers::TWS, but instead are accessed thru your $tws and implemented by the IB published API. The obvious benefit is I have to do less work.  The other benefit (probably more important to you) is that when IB changes things this code continues to work.
+=head3 Instantiation
 
-IB's documentation is pretty weak.  But here is a link to IBs website with a list of methods you can call once you have created a Finance::InteractiveBrokers::TWS object
+When instantiating these objects you can pass all the parameters in positionally according to how IB has documented them.  Or you can just create them blank and set the attributes later.  Some examples are:
 
-http://www.interactivebrokers.com/php/webhelp/Interoperability/Socket_Client_Java/java_eclientsocket.htm
+	my $order = $tws->Order->new(@parms);
 
-=head3 cancelHistoricalData
-
- $tws->cancelHistoricalData(@parms);
-
-=head3 cancelMktData
-
- $tws->cancelMktData(@parms);
-
-=head3 cancelMktDepth
-
- $tws->cancelMktDepth(@parms);
-
-=head3 cancelNewsBulletins
-
- $tws->cancelNewsBulletins(@parms);
-
-=head3 cancelOrder
-
- $tws->cancelOrder(@parms);
-
-=head3 cancelScannerSubscription
-
- $tws->cancelScannerSubscription(@parms);
-
-=head3 exerciseOptions
-
- $tws->exerciseOptions(@parms);
-
-=head3 placeOrder
-
- $tws->placeOrder(@parms);
-
-=head3 replaceFA
-
- $tws->replaceFA(@parms);
-
-=head3 reqAccountUpdates
-
- $tws->reqAccountUpdates(@parms);
-
-=head3 reqAllOpenOrders
-
- $tws->reqAllOpenOrders(@parms);
-
-=head3 reqAutoOpenOrders
-
- $tws->reqAutoOpenOrders(@parms);
-
-=head3 reqContractDetails
-
- $tws->reqContractDetails(@parms);
-
-=head3 reqExecutions
-
- $tws->reqExecutions(@parms);
-
-=head3 reqHistoricalData
-
- $tws->reqHistoricalData(@parms);
-
-=head3 reqIds
-
- $tws->reqIds(@parms);
-
-=head3 reqManagedAccts
-
- $tws->reqManagedAccts(@parms);
-
-=head3 reqMktData
-
- $tws->reqMktData(@parms);
-
-=head3 reqMktDepth
-
- $tws->reqMktDepth(@parms);
-
-=head3 reqNewsBulletins
-
- $tws->reqNewsBulletins(@parms);
-
-=head3 reqOpenOrders
-
- $tws->reqOpenOrders(@parms);
-
-=head3 reqScannerParameters
-
- $tws->reqScannerParameters(@parms);
-
-=head3 reqScannerSubscription
-
- $tws->reqScannerSubscription(@parms);
-
-=head3 requestFA
-
- $tws->requestFA(@parms);
-
-=head3 setServerLogLevel
-
- $tws->setServerLogLevel(@parms);
-
-
-=head2 Creating Java Objects
-
-In addition to the methods described just above.  There are some additional methods available for creating the other IB Java objects necessary for interacting with the TWS.
-
-=head3 Instantiating
-
-When instantiating these objects you can pass all the parameters in positionally according to how IB has documented them.  Or you can just create them blank and set the attributes later.
-
- my $ComboLeg            = $tws->ComboLeg->new(@parms);
- 
- my $Contract            = $tws->Contract->new(@parms);
- 
- my $ContractDetails     = $tws->ContractDetails->new(@parms);
- 
- my $EClientSocket       = $tws->EClientSocket->new(@parms);
-
- my $Execution           = $tws->Execution->new(@parms);
-
- my $ExecutionFilter     = $tws->ExecutionFilter->new(@parms);
- 
- my $Order               = $tws->Order->new(@parms);
-
- my $ScannerSubscription = $tws->ScannerSubscription->new(@parms);
-
-If you find that IB publishes a new Java object that you need to use and it's not included above, you can still use the new object.  The above list is really just a shortcut for doing it the long way.  Such as:
-
- my $order = Finance::InteractiveBrokers::TWS::com::ib::client::ComboLeg->new();
-
-=head3 Set/Get
+=head3 Attribute Setting / Getting
 
 When Inline::Java creates these objects it hands back a Perl reference to hash.  Thus working with these objects is simple.  To set a attribute of an object you do it like:
 
- $contract->{m_symbol}   = 'YHOO';
+	$contract->{m_symbol}   = 'YHOO';
 
 To get an attribute of an object you do it like:
 
- my $symbol = $contract->{m_symbol};
+	my $symbol = $contract->{m_symbol};
 
 =head1 CALLBACK
 
@@ -910,15 +464,15 @@ But in general, you will have methods in your callback like:
 
 
  sub tickPrice {
-    my ($self, @args) = @_;
-    
-    # do something when you get a change in price
+	my ($self, @args) = @_;
+	
+	# do something when you get a change in price
  }
 
  sub error {
-    my ($self, @args) = @_;
+	my ($self, @args) = @_;
 
-    # handle the error
+	# handle the error
  }
 
 Again, these methods are described by IB on their website.
@@ -929,34 +483,34 @@ Again, these methods are described by IB on their website.
  use strict;
  
  sub new {
-     bless {}, shift;
+	 bless {}, shift;
  }
  
  sub nextValidId {
-     my $self = shift;
-     $self->{nextValidId} = $_[0];
-     print "nextValidId called with: ", join(" ", @_), "\n";
+	 my $self = shift;
+	 $self->{nextValidId} = $_[0];
+	 print "nextValidId called with: ", join(" ", @_), "\n";
  }
  
  sub error {
-     my ($self, $return_code, $error_num, $error_text) = @_;
+	 my ($self, $return_code, $error_num, $error_text) = @_;
  
-     print "error called with: ", join('|', $return_code,
-         $error_num, $error_text), "\n";
+	 print "error called with: ", join('|', $return_code,
+	     $error_num, $error_text), "\n";
  
-     # sleep for some predetermined time if I get a 502
-     # Couldn't connect to TWS.  Confirm that "Enable ActiveX and
-     # Socket Clients" is enabled on the TWS "Configure->API" menu.
-    if ($error_num == 502) {
-        sleep 60;
-     }
+	 # sleep for some predetermined time if I get a 502
+	 # Couldn't connect to TWS.  Confirm that "Enable ActiveX and
+	 # Socket Clients" is enabled on the TWS "Configure->API" menu.
+	if ($error_num == 502) {
+	    sleep 60;
+	 }
  }
  
  sub AUTOLOAD {
-     my ($self, @args) = @_;
-     our $AUTOLOAD;
-     print "$AUTOLOAD called with: ", join '^', @args, "\n";
-     return;
+	 my ($self, @args) = @_;
+	 our $AUTOLOAD;
+	 print "$AUTOLOAD called with: ", join '^', @args, "\n";
+	 return;
  }
  
  package main;
@@ -967,12 +521,12 @@ Again, these methods are described by IB on their website.
  
  while (1) {
  
-     if (defined $tws and $tws->isConnected) {
-         $tws->process_messages(1);
-     }
-     else {
-         connect_to_tws();
-     }
+	 if (defined $tws and $tws->isConnected) {
+	     $tws->read_messages_for_x_sec(1);
+	 }
+	 else {
+	     connect_to_tws();
+	 }
  }
  
  $tws->eDisconnect;
@@ -981,29 +535,30 @@ Again, these methods are described by IB on their website.
  #   objects that we want clean at every new connection
  sub connect_to_tws {
  
-     my $callback = Local::Callback->new();
-     $tws = Finance::InteractiveBrokers::TWS->new($callback);
+	 my $callback = Local::Callback->new();
+	 $tws = Finance::InteractiveBrokers::TWS->new($callback);
  
-     ####                        Host         Port    Client_ID
-     ####                        ----         ----    ---------
-     my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
+	 ####                        Host         Port    Client_ID
+	 ####                        ----         ----    ---------
+	 my @tws_GUI_location = qw/  127.0.0.1    7496       15     /;
  
-     $tws->eConnect(@tws_GUI_location);
+	 $tws->eConnect(@tws_GUI_location);
  
-     my $contract_id = 50;      # this can be any number you want
-     my $contract    = $tws->Contract->new();
+	 my $contract_id = 50;      # this can be any number you want
+	 my $contract    = $tws->Contract->new();
  
-     $contract->{m_symbol}   = 'YHOO';
-     $contract->{m_secType}  = 'STK';
-     $contract->{m_exchange} = 'SMART';
+	 $contract->{m_symbol}   = 'YHOO';
+	 $contract->{m_secType}  = 'STK';
+	 $contract->{m_exchange} = 'SMART';
  
-     $tws->reqMktData($contract_id, $contract);
+	 $tws->reqMktData($contract_id, $contract);
  
-     $tws->process_messages(3);
+	 $tws->read_messages_for_x_sec(3);
  
-     return;
+	 return;
  }
  
+
 =head1 HELP
 
 You are welcome to email me if you are having problems with this module.  You should also look at the IB forums (http://www.interactivebrokers.com/cgi-bin/discus/discus.pl) if you have questions about interacting with the TWS (i.e. how to get TWS to do something for you, what the proper call syntax is...)
@@ -1036,20 +591,20 @@ This means you did not supply a callback object when you instantiated a Finance:
  TWS_661f.java:21: incompatible types
  found   : int
  required: java.lang.Object
-                     tickerId, field, price, canAutoExecute
-                     ^
+	                 tickerId, field, price, canAutoExecute
+	                 ^
 
 The above error is sort of a bug, sort of an inconsistancy.  But basically if you are running Java <= 1.4 then you need to alter the TWS.pm source and change the lines that look like:
 
  perlobj.InvokeMethod("tickPrice", new Object [] {
-                       tickerId, field, price, canAutoExecute
-                      });
+	                   tickerId, field, price, canAutoExecute
+	                  });
 
 and manually cast the variables into their types directly, like this:
 
  perlobj.InvokeMethod("tickPrice", new Object [] {
-    new Integer (tickerId), new Integer (field), new Double (price), 
-    new Integer (canAutoExecute)});
+	new Integer (tickerId), new Integer (field), new Double (price), 
+	new Integer (canAutoExecute)});
 
 I don't feel like going through all the code to do this, especially since most
 people will be using Java 1.5 and above shortly
@@ -1091,15 +646,7 @@ Inline::Java v.50_92 or greater
 
 =item *
 
-Object::InsideOut
-
-=item *
-
-Tie::IxHash;
-
-=item *
-
-Config::General;
+Class::InsideOut
 
 =back
 
@@ -1160,3 +707,4 @@ RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A
 FAILURE OF THE SOFTWARE TO OPERATE WITH ANY OTHER SOFTWARE), EVEN IF
 SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
 SUCH DAMAGES.
+/usr/bin/perl

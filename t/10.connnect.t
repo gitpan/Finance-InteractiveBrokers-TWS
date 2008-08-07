@@ -10,6 +10,7 @@ sub AUTOLOAD {                        # Catch-all to avoid errors
     our $AUTOLOAD;
     return;
 }
+1;
 
 package main;
 
@@ -20,7 +21,9 @@ my $cb = Local::Callback->new();
 
 my $tws = Finance::InteractiveBrokers::TWS->new($cb);
 
-ok($tws->eclient->eConnect()    eq 1, "Connected");
-ok($tws->eclient->eDisconnect() eq 1, "Disconnected");
+$tws->eclient->eConnect("localhost",7496,15);
+ok($tws->eclient->isConnected() eq 1, "Connected");
+$tws->eclient->eDisconnect();
+ok($tws->eclient->isConnected() ne 1, "Disconnected");
 
 
